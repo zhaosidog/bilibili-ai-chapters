@@ -40,6 +40,22 @@ test("chunked transcript preserves time marks and sequence", () => {
   assert.match(chunks.at(-1).text, /\[1:30\]/);
 });
 
+test("rejects subtitles and chapters that cover only the opening of a long video", () => {
+  const duration = 1744;
+  assert.equal(core.transcriptCoverage([
+    { from: 0, to: 30 }, { from: 70, to: 80 }
+  ], duration).complete, false);
+  assert.equal(core.chapterCoverage({ chapters: [
+    { start: 0 }, { start: 10 }, { start: 30 }, { start: 50 }, { start: 80 }
+  ] }, duration).complete, false);
+  assert.equal(core.transcriptCoverage([
+    { from: 0, to: 30 }, { from: 1700, to: 1720 }
+  ], duration).complete, true);
+  assert.equal(core.chapterCoverage({ chapters: [
+    { start: 0 }, { start: 600 }, { start: 1200 }
+  ] }, duration).complete, true);
+});
+
 test("model JSON parsing and result validation keep only navigable chapters", () => {
   const parsed = core.parseModelJson("```json\n{\"summary\":\"总结\",\"chapters\":[{\"start\":10,\"title\":\"开始\"},{\"start\":11,\"title\":\"重复\"},{\"start\":200,\"title\":\"越界\"}]}\n```");
   assert.deepEqual(core.normalizeResult(parsed, 100), {

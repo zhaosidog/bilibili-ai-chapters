@@ -143,6 +143,92 @@ def run():
         assert long_page.locator(".bili-ai-status").inner_text() == "完成：1 个章节。"
         long_page.close()
 
+        wrong_bvid = "BV1SUhe6xEM2"
+        wrong_title = "【硬核】俄乌打了四年多，到底谁在买单？"
+        broken_page = browser.new_page(viewport={"width": 1440, "height": 900})
+        broken_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(
+            status=200, content_type="text/html", body="<html><body><video></video></body></html>",
+        ))
+
+        def broken_api(route):
+            if "/x/web-interface/view?" in route.request.url:
+                value = {"code": 0, "data": {"bvid": wrong_bvid, "cid": 42069067290,
+                    "title": wrong_title, "duration": 1744}}
+            else:
+                value = {"code": 0, "data": {"subtitle": {"subtitles": [{
+                    "lan": "zh-CN", "lan_doc": "中文",
+                    "subtitle_url": "//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/test?auth_key=smoke"
+                }]}}}
+            route.fulfill(status=200, content_type="application/json",
+                          headers=CORS, body=json.dumps(value))
+
+        broken_page.route("https://api.bilibili.com/**", broken_api)
+        subtitle_pattern = "https://aisubtitle.hdslb.com/**"
+        broken_page.route(subtitle_pattern, lambda route: route.fulfill(
+            status=200, content_type="application/json", headers=CORS,
+            body=json.dumps({"body": [
+                {"from": 0, "to": 30, "content": "冬季温差影响心脑血管"},
+                {"from": 70, "to": 80, "content": "注意保暖"},
+            ]}),
+        ))
+        broken_page.add_init_script(f"""
+          window.__modelCalls = 0;
+          window.__cacheWrites = 0;
+          window.chrome = {{runtime: {{
+            lastError: null,
+            onMessage: {{addListener: () => {{}}}},
+            sendMessage(message, callback) {{
+              if (message.type === 'GET_SETTINGS') return callback({{ok: true, result: {{
+                configured: true, autoAnalyze: true, localAsrEnabled: false,
+                profileId: 'wrong-smoke', model: 'test'
+              }}}});
+              if (message.type === 'GET_CACHE') return callback({{ok: true, result: {{
+                title: {json.dumps(wrong_title)}, source: 'B 站字幕（中文）',
+                result: {{summary: '冬季心血管风险', chapters: [
+                  {{start: 0, title: '导入'}}, {{start: 80, title: '保暖'}}
+                ]}}
+              }}}});
+              if (message.type === 'MODEL_CALL') {{
+                window.__modelCalls++;
+                return callback({{ok: true, result: {{content: JSON.stringify({{
+                  summary: '冬季心血管风险', chapters: [
+                    {{start: 0, title: '导入'}}, {{start: 80, title: '保暖'}}
+                  ]
+                }})}}}});
+              }}
+              if (message.type === 'PUT_CACHE') window.__cacheWrites++;
+              callback({{ok: true, result: null}});
+            }}
+          }}}};
+        """)
+        broken_page.goto(f"https://www.bilibili.com/video/{wrong_bvid}/")
+        broken_page.add_style_tag(content=(ROOT / "content.css").read_text(encoding="utf-8"))
+        broken_page.add_script_tag(content=(ROOT / "lib/core.js").read_text(encoding="utf-8"))
+        broken_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
+        broken_page.locator(".bili-ai-status:has-text('B 站字幕仅覆盖')").wait_for(
+            state="attached", timeout=10000)
+        assert "视频长 29:04" in broken_page.locator(".bili-ai-status").inner_text()
+        assert broken_page.evaluate("window.__modelCalls") == 0
+
+        broken_page.unroute(subtitle_pattern)
+        broken_page.route(subtitle_pattern, lambda route: route.fulfill(
+            status=200, content_type="application/json", headers=CORS,
+            body=json.dumps({"body": [
+                {"from": 0, "to": 30, "content": "俄罗斯与乌克兰战争的背景"},
+                {"from": 900, "to": 930, "content": "战争带来的经济成本"},
+                {"from": 1700, "to": 1720, "content": "谁在为战争买单"},
+            ]}),
+        ))
+        broken_page.locator(".bili-ai-badge").click()
+        broken_page.locator(".bili-ai-analyze").click()
+        broken_page.locator(".bili-ai-status:has-text('模型生成的章节仅覆盖')").wait_for(
+            timeout=10000)
+        assert broken_page.evaluate("window.__modelCalls") == 1
+        assert broken_page.evaluate("window.__cacheWrites") == 0
+        assert broken_page.locator(".bili-ai-summary").inner_text() == ""
+        broken_page.screenshot(path=str(artifact / "mismatch-smoke.png"), full_page=True)
+        broken_page.close()
+
         options = browser.new_page(viewport={"width": 1100, "height": 900})
         options.add_init_script("""
           window.chrome = {
