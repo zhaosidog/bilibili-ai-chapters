@@ -4,7 +4,7 @@ The browser extension uses Bilibili subtitles when they are available. For a pub
 
 ## Install and run (Windows PowerShell)
 
-Install Python 3.11 or 3.12 and [FFmpeg](https://ffmpeg.org/download.html); make sure `ffmpeg -version` works in a new terminal. From this `helper` directory:
+Install standard CPython 3.11 or 3.12 and [FFmpeg](https://ffmpeg.org/download.html); make sure `ffmpeg -version` works in a new terminal. Check `python -c "import sys; print(sys.executable)"` before creating the virtual environment. On Windows, an Anaconda-based environment may conflict with the native speech recognition libraries; use a standalone CPython interpreter if model loading exits unexpectedly. From this `helper` directory:
 
 ```powershell
 python -m venv .venv
@@ -13,6 +13,8 @@ python -m venv .venv
 ```
 
 Leave the terminal running while using the extension. The service listens **only** on `http://127.0.0.1:8765`. It accepts requests from a Chrome extension origin or a local client with no `Origin` header. It does not accept arbitrary media URLs.
+
+For later runs, `.\start.ps1` starts the same virtual environment, adds its `Scripts` directory to `PATH`, and reuses a model stored in this checkout's `.cache/models/faster-whisper-small` directory when available. If PowerShell blocks local scripts, use `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1` instead; this changes policy only for that process. You can also start `server.py` directly as above.
 
 Check it with `Invoke-RestMethod http://127.0.0.1:8765/health`.
 
