@@ -224,17 +224,55 @@
     const chunks = core.chunkSegments(segments, 9000);
     if (!chunks.length) throw new Error("没有足够的文字来生成总结。");
     const context = `视频标题：${page.title}\n当前分 P：${page.part}\n时长：${Math.round(page.duration)} 秒。`;
+    const totalSteps = chunks.length === 1 ? 1 : chunks.length + 1;
+    const completedDurations = [];
+    const elapsedText = (milliseconds) => {
+      const seconds = Math.floor(milliseconds / 1000);
+      return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+    };
+    const estimateText = (milliseconds) => {
+      const seconds = Math.ceil(milliseconds / 1000);
+      return seconds < 60 ? `${Math.max(10, Math.ceil(seconds / 10) * 10)} 秒`
+        : `${Math.ceil(seconds / 60)} 分钟`;
+    };
+    async function askWithProgress(prompt, final, completed, label) {
+      const startedAt = performance.now();
+      const update = () => {
+        if (runId !== state.runId) return;
+        const elapsed = performance.now() - startedAt;
+        let remaining = totalSteps === 1 ? "模型单次请求最多等待约 2 分钟" : "完成首段后估算剩余时间";
+        if (completedDurations.length) {
+          const recent = completedDurations.slice(-3);
+          const average = recent.reduce((sum, duration) => sum + duration, 0) / recent.length;
+          const estimate = average * (totalSteps - completed) - elapsed;
+          remaining = average < 1000
+            ? "已完成的请求较快，剩余时间暂无法稳定估算"
+            : estimate > 0 && elapsed < average * 1.5
+              ? `按前几段速度，预计剩余约 ${estimateText(estimate)}`
+              : "当前步骤比前几段慢，剩余时间暂无法估算";
+        }
+        setStatus(`${label}。已完成 ${completed}/${totalSteps} 步，正在进行第 ${completed + 1} 步；已等待 ${elapsedText(elapsed)}；${remaining}。`);
+      };
+      update();
+      const timer = setInterval(update, 5000);
+      try {
+        const answer = await askModel(prompt, final);
+        completedDurations.push(performance.now() - startedAt);
+        return answer;
+      } finally {
+        clearInterval(timer);
+      }
+    }
     if (chunks.length === 1) {
-      setStatus("正在调用模型生成总结与章节（1/1）…");
-      const answer = await askModel(`${context}\n请写 100-300 字总结，并给出约 5-12 个章节（短视频可更少）。start 使用绝对秒数。\n字幕：\n${chunks[0].text}`, true);
+      const answer = await askWithProgress(`${context}\n请写 100-300 字总结，并给出约 5-12 个章节（短视频可更少）。start 使用绝对秒数。\n字幕：\n${chunks[0].text}`, true, 0, "正在生成总结与章节");
       return core.normalizeResult(answer, page.duration);
     }
     const outlines = [];
     for (let index = 0; index < chunks.length; index++) {
       if (runId !== state.runId) throw new Error("分析已取消。");
       const chunk = chunks[index];
-      setStatus(`正在提炼视频内容（${index + 1}/${chunks.length}）…`);
-      const answer = await askModel(`${context}\n这是第 ${index + 1}/${chunks.length} 段，范围 ${Math.round(chunk.start)}-${Math.round(chunk.end)} 秒。请写一段简短总结，提出 2-4 个主题章节候选，start 必须在本段范围内并用绝对秒数。\n字幕：\n${chunk.text}`, false);
+      const answer = await askWithProgress(`${context}\n这是第 ${index + 1}/${chunks.length} 段，范围 ${Math.round(chunk.start)}-${Math.round(chunk.end)} 秒。请写一段简短总结，提出 2-4 个主题章节候选，start 必须在本段范围内并用绝对秒数。\n字幕：\n${chunk.text}`, false, index,
+        `正在提炼第 ${index + 1}/${chunks.length} 段，之后还需整合全片`);
       let normalized;
       try {
         normalized = core.normalizeResult(answer, page.duration);
@@ -255,10 +293,10 @@
       });
     }
     if (runId !== state.runId) throw new Error("分析已取消。");
-    setStatus("正在整合完整视频的主题章节…");
     const candidates = outlines.flatMap((outline) => outline.chapters);
     try {
-      const answer = await askModel(`${context}\n下面是按时间顺序整理的分段摘要与章节候选。请写 150-400 字全片总结，合并重复主题，生成约 8-20 个覆盖全片的章节。start 只能从下面候选的 start 数值中选择，不得生成新时间。\n${JSON.stringify(outlines)}`, true);
+      const answer = await askWithProgress(`${context}\n下面是按时间顺序整理的分段摘要与章节候选。请写 150-400 字全片总结，合并重复主题，生成约 8-20 个覆盖全片的章节。start 只能从下面候选的 start 数值中选择，不得生成新时间。\n${JSON.stringify(outlines)}`, true,
+        chunks.length, `已提炼全部 ${chunks.length} 段，正在整合全片（最后一步）`);
       const result = core.normalizeResult(answer, page.duration);
       const chapters = result.chapters.map((chapter) => {
         const nearest = candidates.reduce((best, candidate) =>

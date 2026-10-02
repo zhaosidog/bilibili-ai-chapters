@@ -93,6 +93,56 @@ def run():
         artifact.mkdir(exist_ok=True)
         page.screenshot(path=str(artifact / "ui-smoke.png"), full_page=True)
 
+        long_page = browser.new_page(viewport={"width": 1440, "height": 900})
+        long_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(
+            status=200, content_type="text/html",
+            body="<html><body><video></video></body></html>",
+        ))
+        long_page.route("https://api.bilibili.com/**", api)
+        long_page.route("https://aisubtitle.hdslb.com/**", lambda route: route.fulfill(
+            status=200, content_type="application/json", headers=CORS,
+            body=json.dumps({"body": [
+                {"from": i * 5, "to": i * 5 + 4, "content": "内容" * 900}
+                for i in range(12)
+            ]}),
+        ))
+        long_page.add_init_script("""
+          window.chrome = {runtime: {
+            lastError: null,
+            onMessage: {addListener: () => {}},
+            sendMessage(message, callback) {
+              if (message.type === 'GET_SETTINGS') {
+                callback({ok: true, result: {
+                  configured: true, autoAnalyze: true, localAsrEnabled: false,
+                  profileId: 'long-smoke', model: 'test'
+                }});
+                return;
+              }
+              if (message.type === 'MODEL_CALL') {
+                const prompt = message.messages[1].content;
+                const start = Number(prompt.match(/范围 (\\d+)-/)?.[1] || 0);
+                setTimeout(() => callback({ok: true, result: {content: JSON.stringify({
+                  summary: '视频总结',
+                  chapters: [{start, title: '测试章节', summary: '章节内容'}]
+                })}}), message.final ? 1500 : 1100);
+                return;
+              }
+              callback({ok: true, result: null});
+            }
+          }};
+        """)
+        long_page.goto(f"https://www.bilibili.com/video/{BVID}/")
+        long_page.add_script_tag(content=(ROOT / "lib/core.js").read_text(encoding="utf-8"))
+        long_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
+        long_page.locator(".bili-ai-status:has-text('正在整合全片')").wait_for(
+            state="attached", timeout=12000)
+        merging = long_page.locator(".bili-ai-status").inner_text()
+        assert "已完成 3/4 步，正在进行第 4 步" in merging, merging
+        assert "预计剩余约" in merging, merging
+        long_page.locator(".bili-ai-badge[data-kind='ready']").wait_for(timeout=5000)
+        assert long_page.locator(".bili-ai-status").inner_text() == "完成：1 个章节。"
+        long_page.close()
+
         options = browser.new_page(viewport={"width": 1100, "height": 900})
         options.add_init_script("""
           window.chrome = {
