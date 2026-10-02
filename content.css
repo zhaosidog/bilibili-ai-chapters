@@ -1,0 +1,157 @@
+#bili-ai-chapters-root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #17212e;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+#bili-ai-chapters-root * { box-sizing: border-box; }
+
+#bili-ai-chapters-root .bili-ai-badge {
+  position: fixed;
+  z-index: 2147483645;
+  right: 18px;
+  top: 36%;
+  border: 0;
+  border-radius: 24px;
+  padding: 10px 14px;
+  background: #00a1d6;
+  color: white;
+  box-shadow: 0 4px 18px #11354b40;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+#bili-ai-chapters-root .bili-ai-badge[data-kind="error"] { background: #d65b4a; }
+#bili-ai-chapters-root .bili-ai-badge[data-kind="ready"] { background: #268a73; }
+#bili-ai-chapters-root .bili-ai-badge[aria-expanded="true"] { display: none; }
+
+#bili-ai-chapters-root .bili-ai-panel {
+  position: fixed;
+  z-index: 2147483646;
+  top: min(80px, 7vh);
+  right: 20px;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(82vh, 900px);
+  background: #fff;
+  border: 1px solid #dce6ec;
+  border-radius: 14px;
+  box-shadow: 0 16px 50px #0e304f40;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#bili-ai-chapters-root .bili-ai-panel[hidden] { display: none; }
+
+#bili-ai-chapters-root .bili-ai-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  color: white;
+  background: linear-gradient(115deg, #00a1d6, #3a83dc);
+}
+
+#bili-ai-chapters-root .bili-ai-header strong { display: block; font-size: 16px; }
+#bili-ai-chapters-root .bili-ai-subtitle { font-size: 11px; opacity: .85; }
+#bili-ai-chapters-root .bili-ai-header-actions { display: flex; gap: 6px; }
+
+#bili-ai-chapters-root .bili-ai-icon {
+  border: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  background: #ffffff22;
+  color: white;
+  font-size: 21px;
+  cursor: pointer;
+}
+
+#bili-ai-chapters-root .bili-ai-icon:hover { background: #ffffff44; }
+#bili-ai-chapters-root .bili-ai-body { overflow-y: auto; padding: 16px; }
+
+#bili-ai-chapters-root .bili-ai-video-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+  margin-bottom: 10px;
+}
+
+#bili-ai-chapters-root .bili-ai-status {
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: #36536c;
+  background: #edf5fa;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+#bili-ai-chapters-root .bili-ai-status[data-kind="error"] {
+  color: #a8372e;
+  background: #fff0ee;
+}
+
+#bili-ai-chapters-root .bili-ai-status[data-kind="ready"] {
+  color: #1a705b;
+  background: #ecf8f3;
+}
+
+#bili-ai-chapters-root .bili-ai-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+
+#bili-ai-chapters-root .bili-ai-analyze {
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: white;
+  background: #00a1d6;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#bili-ai-chapters-root .bili-ai-analyze:disabled { opacity: .55; cursor: wait; }
+#bili-ai-chapters-root .bili-ai-source { color: #8092a0; font-size: 11px; }
+#bili-ai-chapters-root h3 { margin: 15px 0 8px; font-size: 14px; }
+#bili-ai-chapters-root .bili-ai-summary { color: #34495a; white-space: pre-wrap; }
+
+#bili-ai-chapters-root .bili-ai-chapters {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#bili-ai-chapters-root .bili-ai-chapters li { border-top: 1px solid #edf0f4; padding: 6px 0; }
+
+#bili-ai-chapters-root .bili-ai-chapter {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 5px;
+  text-align: left;
+  color: #17212e;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+#bili-ai-chapters-root .bili-ai-chapter:hover { background: #eff9fd; }
+#bili-ai-chapters-root .bili-ai-time { color: #008ebf; font-variant-numeric: tabular-nums; font-weight: 700; }
+#bili-ai-chapters-root .bili-ai-chapter-title { font-weight: 600; }
+#bili-ai-chapters-root .bili-ai-chapters p { margin: 0 5px 8px 51px; color: #697c8c; font-size: 12px; }
+
+@media (max-width: 600px) {
+  #bili-ai-chapters-root .bili-ai-panel { top: 10px; right: 10px; max-height: 88vh; }
+  #bili-ai-chapters-root .bili-ai-badge { right: 10px; }
+}
