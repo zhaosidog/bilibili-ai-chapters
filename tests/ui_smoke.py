@@ -229,6 +229,67 @@ def run():
         broken_page.screenshot(path=str(artifact / "mismatch-smoke.png"), full_page=True)
         broken_page.close()
 
+        reload_bvid = "BV1P1Yk6EEX9"
+        reload_page = browser.new_page(viewport={"width": 1440, "height": 900})
+        reload_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(
+            status=200, content_type="text/html", body="<html><body><video></video></body></html>",
+        ))
+
+        def reload_api(route):
+            if "/x/web-interface/view?" in route.request.url:
+                value = {"code": 0, "data": {"bvid": reload_bvid, "cid": 123,
+                    "title": "minimaxH3教程", "duration": 1077,
+                    "pages": [{"cid": 123, "page": 1, "part": "本地部署", "duration": 1077}]}}
+            else:
+                value = {"code": 0, "data": {"subtitle": {"subtitles": [{
+                    "lan": "zh-CN", "lan_doc": "中文",
+                    "subtitle_url": "//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/test?auth_key=smoke"
+                }]}}}
+            route.fulfill(status=200, content_type="application/json",
+                          headers=CORS, body=json.dumps(value))
+
+        reload_page.route("https://api.bilibili.com/**", reload_api)
+        reload_page.route("https://aisubtitle.hdslb.com/**", lambda route: route.fulfill(
+            status=200, content_type="application/json", headers=CORS,
+            body=json.dumps({"body": [
+                {"from": 3, "to": 15, "content": "俺姓张名飞字翼德"},
+            ]}),
+        ))
+        reload_page.add_init_script("""
+          window.chrome = {runtime: {
+            lastError: null,
+            onMessage: {addListener: () => {}},
+            sendMessage(message, callback) {
+              if (message.type === 'GET_SETTINGS') return callback({ok: true, result: {
+                configured: true, autoAnalyze: true, localAsrEnabled: true,
+                profileId: 'reload-smoke', model: 'test'
+              }});
+              if (message.type === 'GET_CACHE') return callback({ok: true, result: null});
+              if (message.type === 'LOCAL_ASR' && message.action === 'start') {
+                return callback({ok: true, result: {
+                  job_id: 'test-job', status: 'running', progress: 25, stage: 'transcribing'
+                }});
+              }
+              if (message.type === 'LOCAL_ASR' && message.action === 'poll') {
+                throw new Error('Extension context invalidated.');
+              }
+              callback({ok: true, result: null});
+            }
+          }};
+        """)
+        reload_page.goto(f"https://www.bilibili.com/video/{reload_bvid}/")
+        reload_page.add_script_tag(content=(ROOT / "lib/core.js").read_text(encoding="utf-8"))
+        reload_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
+        reload_page.locator(".bili-ai-status:has-text('扩展连接已失效')").wait_for(
+            state="attached", timeout=10000)
+        reload_page.locator(".bili-ai-badge").click()
+        assert "本地语音转写未完成" not in reload_page.locator(".bili-ai-status").inner_text()
+        assert reload_page.locator(".bili-ai-analyze").inner_text() == "刷新页面继续"
+        with reload_page.expect_navigation(wait_until="domcontentloaded"):
+            reload_page.locator(".bili-ai-analyze").click()
+        assert reload_page.evaluate("performance.getEntriesByType('navigation')[0].type") == "reload"
+        reload_page.close()
+
         options = browser.new_page(viewport={"width": 1100, "height": 900})
         options.add_init_script("""
           window.chrome = {

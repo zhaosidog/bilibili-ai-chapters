@@ -18,7 +18,8 @@
     source: null,
     summary: null,
     chapters: null,
-    analyze: null
+    analyze: null,
+    needsReload: false
   };
 
   function getRoute() {
@@ -28,14 +29,32 @@
     return { bvid: match[1], page, signature: `${match[1]}:${page}` };
   }
 
+  function requestError(error) {
+    const message = String(error?.message || error || "扩展请求失败。");
+    if (!/Extension context (?:is )?invalidated/i.test(message)) return new Error(message);
+    state.needsReload = true;
+    if (state.analyze) state.analyze.textContent = "刷新页面继续";
+    const recovery = new Error("扩展连接已失效（通常是扩展刚更新或重新加载）。请点击“刷新页面继续”；helper 的转写任务会继续，刷新后可接续。");
+    recovery.code = "EXTENSION_CONTEXT_INVALIDATED";
+    return recovery;
+  }
+
   function send(message) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, (response) => {
-        const error = chrome.runtime.lastError;
-        if (error) return reject(new Error(error.message));
-        if (!response?.ok) return reject(new Error(response?.error || "扩展请求失败。"));
-        resolve(response.result);
-      });
+      try {
+        chrome.runtime.sendMessage(message, (response) => {
+          try {
+            const error = chrome.runtime.lastError;
+            if (error) return reject(requestError(error));
+            if (!response?.ok) return reject(requestError(response?.error || "扩展请求失败。"));
+            resolve(response.result);
+          } catch (error) {
+            reject(requestError(error));
+          }
+        });
+      } catch (error) {
+        reject(requestError(error));
+      }
     });
   }
 
@@ -126,7 +145,10 @@
     root.querySelector(".bili-ai-settings").addEventListener("click", () => {
       send({ type: "OPEN_OPTIONS" }).catch((error) => setStatus(error.message, "error"));
     });
-    state.analyze.addEventListener("click", () => runAnalysis(true));
+    state.analyze.addEventListener("click", () => {
+      if (state.needsReload) window.location.reload();
+      else runAnalysis(true);
+    });
   }
 
   function seek(seconds) {
@@ -211,7 +233,15 @@
         if (!job?.job_id || Date.now() > deadline) throw new Error("本地语音转写没有完成，请检查 helper 输出。");
         const progress = Number(job.progress);
         const suffix = Number.isFinite(progress) ? ` ${Math.round(progress)}%` : "";
-        setStatus(`正在语音转写：${job.stage || "处理中"}${suffix}。`);
+        const stages = {
+          queued: "排队中（helper 一次只处理一个视频）",
+          starting: "启动中",
+          "reading metadata": "读取视频信息",
+          "downloading audio": "下载音频",
+          "loading ASR model": "加载语音模型",
+          transcribing: "识别语音"
+        };
+        setStatus(`正在语音转写：${stages[job.stage] || job.stage || "处理中"}${suffix}。`);
         await new Promise((resolve) => setTimeout(resolve, 2500));
         job = await send({ type: "LOCAL_ASR", action: "poll", bvid: route.bvid, jobId: job.job_id });
       }
@@ -220,6 +250,7 @@
       return { segments, source: "本地语音转写",
         coverage: core.transcriptCoverage(segments, page.duration) };
     } catch (error) {
+      if (error.code === "EXTENSION_CONTEXT_INVALIDATED") throw error;
       if (subtitleIssue) throw new Error(`${subtitleIssue}；本地语音转写未完成：${error.message}`);
       throw error;
     }
