@@ -87,8 +87,26 @@ def run():
         page.locator(".bili-ai-badge").click()
         assert page.locator(".bili-ai-summary").inner_text() == "这是视频总结。"
         assert page.locator(".bili-ai-chapter-title").inner_text() == "第一章"
+        assert page.locator(".bili-ai-transcript-line").count() == 2
+        page.locator(".bili-ai-transcript-line[data-index='0'][data-active='true']").wait_for()
+        page.evaluate("window.__seek = 4.5")
+        page.wait_for_function("document.querySelectorAll('.bili-ai-transcript-line[data-active=true]').length === 0")
+        page.evaluate("window.__seek = 7")
+        page.locator(".bili-ai-transcript-line[data-index='1'][data-active='true']").wait_for()
+        page.locator(".bili-ai-transcript-line[data-index='0']").click()
+        assert page.evaluate("window.__seek") == 0
         page.locator(".bili-ai-chapter").click()
         assert page.evaluate("window.__seek") == 5
+        page.evaluate("""() => {
+          const oldVideo = document.querySelector('video');
+          const replacement = oldVideo.cloneNode();
+          Object.defineProperty(replacement, 'duration', {value: 100});
+          Object.defineProperty(replacement, 'currentTime', {
+            get() { return 2; }, set(value) { window.__replacementSeek = value; }
+          });
+          oldVideo.replaceWith(replacement);
+        }""")
+        page.locator(".bili-ai-transcript-line[data-index='0'][data-active='true']").wait_for()
         with page.expect_download() as srt_event:
             page.locator(".bili-ai-download").click()
         srt = srt_event.value
@@ -105,6 +123,10 @@ def run():
         artifact = ROOT / "artifacts"
         artifact.mkdir(exist_ok=True)
         page.screenshot(path=str(artifact / "ui-smoke.png"), full_page=True)
+        page.set_viewport_size({"width": 600, "height": 900})
+        assert (page.locator(".bili-ai-transcript-column").bounding_box()["y"] >
+                page.locator(".bili-ai-main-column").bounding_box()["y"])
+        page.screenshot(path=str(artifact / "ui-mobile-smoke.png"), full_page=True)
 
         cached_page = browser.new_page(viewport={"width": 1440, "height": 900})
         cached_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(
@@ -144,6 +166,8 @@ def run():
         cached_page.locator(".bili-ai-badge[data-kind='ready']").wait_for(timeout=10000)
         cached_page.locator(".bili-ai-badge").click()
         assert cached_page.locator(".bili-ai-summary").inner_text() == "缓存的总结"
+        cached_page.locator(".bili-ai-transcript-line").first.wait_for(timeout=10000)
+        assert cached_page.locator(".bili-ai-transcript-line").count() == 2
         with cached_page.expect_download() as cached_event:
             cached_page.locator(".bili-ai-download").click()
         cached_text = Path(cached_event.value.path()).read_bytes().decode("utf-8-sig")
@@ -178,9 +202,35 @@ def run():
         keyless_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
         keyless_page.locator(".bili-ai-badge[data-kind='error']").wait_for(timeout=10000)
         keyless_page.locator(".bili-ai-badge").click()
+        keyless_page.locator(".bili-ai-transcript-line").first.wait_for(timeout=10000)
         with keyless_page.expect_download() as keyless_event:
             keyless_page.locator(".bili-ai-download").click()
         assert "无需模型密钥的字幕" in Path(keyless_event.value.path()).read_bytes().decode("utf-8-sig")
+        next_bvid = "BV1P1Yk6EEX9"
+        keyless_page.unroute("https://api.bilibili.com/**")
+
+        def next_api(route):
+            if "/x/web-interface/view?" in route.request.url:
+                value = {"code": 0, "data": {"bvid": next_bvid, "cid": 99,
+                    "title": "下一段视频", "duration": 100}}
+            else:
+                value = {"code": 0, "data": {"subtitle": {"subtitles": [{
+                    "lan": "zh-CN", "lan_doc": "中文",
+                    "subtitle_url": "//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/next?auth_key=smoke"
+                }]}}}
+            route.fulfill(status=200, content_type="application/json",
+                          headers=CORS, body=json.dumps(value))
+
+        keyless_page.route("https://api.bilibili.com/**", next_api)
+        keyless_page.unroute("https://aisubtitle.hdslb.com/**")
+        keyless_page.route("https://aisubtitle.hdslb.com/**", lambda route: route.fulfill(
+            status=200, content_type="application/json", headers=CORS,
+            body=json.dumps({"body": [{"from": 0, "to": 95, "content": "新视频的同步字幕"}]}),
+        ))
+        keyless_page.evaluate(f"history.pushState(null, '', '/video/{next_bvid}/')")
+        keyless_page.locator(".bili-ai-transcript-line:has-text('新视频的同步字幕')").wait_for(
+            timeout=10000)
+        assert keyless_page.locator(".bili-ai-transcript-line:has-text('无需模型密钥的字幕')").count() == 0
         keyless_page.close()
 
         long_page = browser.new_page(viewport={"width": 1440, "height": 900})
@@ -222,6 +272,7 @@ def run():
           }};
         """)
         long_page.goto(f"https://www.bilibili.com/video/{BVID}/")
+        long_page.add_style_tag(content=(ROOT / "content.css").read_text(encoding="utf-8"))
         long_page.add_script_tag(content=(ROOT / "lib/core.js").read_text(encoding="utf-8"))
         long_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
         long_page.locator(".bili-ai-status:has-text('正在整合全片')").wait_for(
@@ -231,6 +282,25 @@ def run():
         assert "预计剩余约" in merging, merging
         long_page.locator(".bili-ai-badge[data-kind='ready']").wait_for(timeout=5000)
         assert long_page.locator(".bili-ai-status").inner_text() == "完成：1 个章节。"
+        long_page.locator(".bili-ai-badge").click()
+        assert long_page.locator(".bili-ai-transcript-line").count() == 12
+        long_page.evaluate("""() => {
+          const video = document.querySelector('video');
+          window.__longTime = 56;
+          Object.defineProperty(video, 'currentTime', {
+            get() { return window.__longTime; },
+            set(value) { window.__longTime = value; }
+          });
+        }""")
+        long_page.locator(".bili-ai-transcript-line[data-index='11'][data-active='true']").wait_for()
+        long_page.wait_for_function("document.querySelector('.bili-ai-transcript-list').scrollTop > 0")
+        long_page.locator(".bili-ai-transcript-list").dispatch_event("wheel")
+        long_page.evaluate("document.querySelector('.bili-ai-transcript-list').scrollTop = 0")
+        long_page.evaluate("window.__longTime = 51")
+        long_page.locator(".bili-ai-transcript-line[data-index='10'][data-active='true']").wait_for()
+        assert long_page.evaluate("document.querySelector('.bili-ai-transcript-list').scrollTop") == 0
+        long_page.locator(".bili-ai-follow").click()
+        long_page.wait_for_function("document.querySelector('.bili-ai-transcript-list').scrollTop > 0")
         long_page.close()
 
         wrong_bvid = "BV1SUhe6xEM2"
@@ -299,6 +369,8 @@ def run():
             state="attached", timeout=10000)
         assert "视频长 29:04" in broken_page.locator(".bili-ai-status").inner_text()
         assert broken_page.evaluate("window.__modelCalls") == 0
+        assert "B 站字幕仅覆盖" in broken_page.locator(".bili-ai-transcript-notice").text_content()
+        assert broken_page.locator(".bili-ai-transcript-line").count() == 0
 
         broken_page.unroute(subtitle_pattern)
         broken_page.route(subtitle_pattern, lambda route: route.fulfill(

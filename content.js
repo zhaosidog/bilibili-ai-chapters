@@ -24,6 +24,15 @@
     downloadBusy: false,
     transcriptLoading: false,
     transcript: null,
+    transcriptPromise: null,
+    transcriptNotice: null,
+    transcriptSource: null,
+    transcriptList: null,
+    transcriptButtons: [],
+    follow: null,
+    activeTranscriptIndex: -1,
+    lastScrolledIndex: -1,
+    followPausedUntil: 0,
     needsReload: false
   };
 
@@ -101,6 +110,13 @@
     state.open = open;
     state.panel.hidden = !open;
     state.badge.setAttribute("aria-expanded", String(open));
+    if (!open) return;
+    updateActiveSubtitle(true);
+    const route = getRoute();
+    if (route && !state.transcript && !state.analyze.disabled) {
+      const runId = state.runId;
+      ensureTranscript(route, runId).catch(() => {});
+    }
   }
 
   function clearResult() {
@@ -116,7 +132,7 @@
       <button class="bili-ai-badge" type="button" aria-label="打开 AI 视频章节" aria-expanded="false">AI 章节</button>
       <section class="bili-ai-panel" aria-label="AI 视频章节" hidden>
         <header class="bili-ai-header">
-          <div><strong>AI 视频章节</strong><span class="bili-ai-subtitle">总结 · 点击跳转</span></div>
+          <div><strong>AI 视频章节</strong><span class="bili-ai-subtitle">总结 · 章节 · 同步字幕</span></div>
           <div class="bili-ai-header-actions">
             <button type="button" class="bili-ai-icon bili-ai-settings" title="模型设置" aria-label="模型设置">⚙</button>
             <button type="button" class="bili-ai-icon bili-ai-close" title="收起" aria-label="收起">×</button>
@@ -134,10 +150,23 @@
             <button type="button" class="bili-ai-download">下载字幕</button>
             <span class="bili-ai-source"></span>
           </div>
-          <h3>视频总结</h3>
-          <div class="bili-ai-summary"></div>
-          <h3>主题章节</h3>
-          <ol class="bili-ai-chapters"></ol>
+          <div class="bili-ai-columns">
+            <div class="bili-ai-main-column">
+              <h3>视频总结</h3>
+              <div class="bili-ai-summary"></div>
+              <h3>主题章节</h3>
+              <ol class="bili-ai-chapters"></ol>
+            </div>
+            <section class="bili-ai-transcript-column" aria-label="同步字幕">
+              <div class="bili-ai-transcript-heading">
+                <h3>同步字幕</h3>
+                <button type="button" class="bili-ai-follow" disabled>定位当前</button>
+              </div>
+              <div class="bili-ai-transcript-source"></div>
+              <div class="bili-ai-transcript-notice" role="status">打开面板后读取字幕…</div>
+              <ol class="bili-ai-transcript-list" aria-label="字幕列表"></ol>
+            </section>
+          </div>
         </div>
       </section>`;
     document.body.append(root);
@@ -152,6 +181,10 @@
     state.analyze = root.querySelector(".bili-ai-analyze");
     state.download = root.querySelector(".bili-ai-download");
     state.downloadFormat = root.querySelector(".bili-ai-download-format");
+    state.transcriptNotice = root.querySelector(".bili-ai-transcript-notice");
+    state.transcriptSource = root.querySelector(".bili-ai-transcript-source");
+    state.transcriptList = root.querySelector(".bili-ai-transcript-list");
+    state.follow = root.querySelector(".bili-ai-follow");
     state.badge.addEventListener("click", () => openPanel(!state.open));
     root.querySelector(".bili-ai-close").addEventListener("click", () => openPanel(false));
     root.querySelector(".bili-ai-settings").addEventListener("click", () => {
@@ -162,16 +195,125 @@
       else runAnalysis(true);
     });
     state.download.addEventListener("click", downloadSubtitle);
+    state.transcriptList.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-index]");
+      if (!button || !state.transcript || getRoute()?.signature !== state.transcript.signature) return;
+      const index = Number(button.dataset.index);
+      const segment = state.transcript.transcript.segments[index];
+      if (!segment) return;
+      state.followPausedUntil = 0;
+      state.lastScrolledIndex = -1;
+      seek(segment.from);
+      updateActiveSubtitle(true);
+    });
+    const pauseFollow = () => {
+      state.followPausedUntil = Date.now() + 8000;
+      state.lastScrolledIndex = -1;
+    };
+    state.transcriptList.addEventListener("wheel", pauseFollow, { passive: true });
+    state.transcriptList.addEventListener("touchstart", pauseFollow, { passive: true });
+    state.transcriptList.addEventListener("pointerdown", pauseFollow, { passive: true });
+    state.transcriptList.addEventListener("keydown", (event) => {
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key)) pauseFollow();
+    });
+    state.follow.addEventListener("click", () => {
+      state.followPausedUntil = 0;
+      state.lastScrolledIndex = -1;
+      updateActiveSubtitle(true);
+    });
+  }
+
+  function mainVideo() {
+    const videos = [...document.querySelectorAll("video")];
+    return videos.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
   }
 
   function seek(seconds) {
-    const videos = [...document.querySelectorAll("video")];
-    const video = videos.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+    const video = mainVideo();
     if (!video) return setStatus("当前页面尚未加载视频播放器。", "error");
     const target = Math.max(0, Number(seconds) || 0);
     video.currentTime = Number.isFinite(video.duration) ? Math.min(target, Math.max(0, video.duration - 0.1)) : target;
     video.scrollIntoView({ behavior: "smooth", block: "center" });
     setStatus(`已跳转到 ${core.formatTime(target)}。`, "ready");
+  }
+
+  function transcriptNotice(message, kind = "normal") {
+    state.transcriptNotice.hidden = false;
+    state.transcriptNotice.textContent = message;
+    state.transcriptNotice.dataset.kind = kind;
+  }
+
+  function clearTranscript() {
+    state.transcript = null;
+    state.transcriptButtons = [];
+    state.activeTranscriptIndex = -1;
+    state.lastScrolledIndex = -1;
+    state.followPausedUntil = 0;
+    state.transcriptList.replaceChildren();
+    state.transcriptSource.textContent = "";
+    state.follow.disabled = true;
+    transcriptNotice("正在准备当前视频的字幕…");
+  }
+
+  function renderTranscript(entry) {
+    const fragment = document.createDocumentFragment();
+    const buttons = [];
+    entry.transcript.segments.forEach((segment, index) => {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "bili-ai-transcript-line";
+      button.dataset.index = String(index);
+      const time = document.createElement("span");
+      time.className = "bili-ai-transcript-time";
+      time.textContent = core.formatTime(segment.from);
+      const text = document.createElement("span");
+      text.className = "bili-ai-transcript-text";
+      text.textContent = segment.content;
+      button.append(time, text);
+      item.append(button);
+      fragment.append(item);
+      buttons.push(button);
+    });
+    state.transcriptList.replaceChildren(fragment);
+    state.transcriptButtons = buttons;
+    state.activeTranscriptIndex = -1;
+    state.lastScrolledIndex = -1;
+    state.followPausedUntil = 0;
+    state.transcriptSource.textContent = `${entry.transcript.source} · ${buttons.length} 条`;
+    state.transcriptNotice.hidden = true;
+    state.follow.disabled = false;
+    updateActiveSubtitle(true);
+  }
+
+  function updateActiveSubtitle(force = false) {
+    const entry = state.transcript;
+    if (!state.open || !entry || getRoute()?.signature !== entry.signature) return;
+    const video = mainVideo();
+    if (!video) return;
+    const index = core.activeSegmentIndex(entry.transcript.segments, video.currentTime);
+    if (index !== state.activeTranscriptIndex) {
+      const previous = state.transcriptButtons[state.activeTranscriptIndex];
+      if (previous) {
+        delete previous.dataset.active;
+        previous.removeAttribute("aria-current");
+      }
+      const current = state.transcriptButtons[index];
+      if (current) {
+        current.dataset.active = "true";
+        current.setAttribute("aria-current", "true");
+      }
+      state.activeTranscriptIndex = index;
+      if (index < 0) state.lastScrolledIndex = -1;
+    }
+    if (index < 0 || Date.now() < state.followPausedUntil ||
+        (!force && index === state.lastScrolledIndex)) return;
+    const list = state.transcriptList;
+    const line = state.transcriptButtons[index];
+    const offset = line.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    const top = Math.max(0, list.scrollTop + offset - list.clientHeight / 2 + line.clientHeight / 2);
+    list.scrollTo({ top, behavior: force ? "auto" : "smooth" });
+    state.lastScrolledIndex = index;
   }
 
   function showResult(result, source, cached = false) {
@@ -269,6 +411,57 @@
     }
   }
 
+  function ensureTranscript(route, runId, knownPage = null) {
+    if (state.transcript?.signature === route.signature) return Promise.resolve(state.transcript);
+    if (state.transcriptPromise?.signature === route.signature &&
+        state.transcriptPromise.runId === runId) return state.transcriptPromise.promise;
+    state.transcriptLoading = true;
+    state.download.disabled = true;
+    transcriptNotice("正在读取字幕；如需本地转写，完成后会自动显示…");
+    const current = () => runId === state.runId && getRoute()?.signature === route.signature;
+    const promise = (async () => {
+      try {
+        const settings = await send({ type: "GET_SETTINGS" });
+        if (!current()) throw new Error("字幕读取已取消。");
+        state.settings = settings;
+        let page = knownPage;
+        if (!page) {
+          setStatus("正在读取视频信息与字幕…");
+          const view = await getBiliJson(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(route.bvid)}`);
+          page = core.selectPage(view.data, route.page);
+        }
+        if (!current()) throw new Error("字幕读取已取消。");
+        state.title.textContent = page.page > 1 ? `${page.title} · P${page.page} ${page.part}` : page.title;
+        const transcript = await loadTranscript(route, page, runId);
+        if (!current()) throw new Error("字幕读取已取消。");
+        requireCompleteTranscript(transcript, page);
+        const entry = { signature: route.signature, page, transcript };
+        state.transcript = entry;
+        renderTranscript(entry);
+        if (!state.analyze.disabled) {
+          setStatus(`已载入 ${entry.transcript.segments.length} 条同步字幕。`, "ready");
+        }
+        return entry;
+      } catch (error) {
+        if (current()) {
+          transcriptNotice(error.message || "字幕读取失败。", "error");
+          if (!state.analyze.disabled) setStatus(error.message || "字幕读取失败。", "error");
+        }
+        throw error;
+      }
+    })();
+    const record = { signature: route.signature, runId, promise };
+    state.transcriptPromise = record;
+    const cleanup = () => {
+      if (state.transcriptPromise !== record) return;
+      state.transcriptPromise = null;
+      state.transcriptLoading = false;
+      state.download.disabled = state.downloadBusy;
+    };
+    promise.then(cleanup, cleanup);
+    return promise;
+  }
+
   function saveSubtitle(text, filename) {
     const blob = new Blob(["\ufeff", text], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -296,21 +489,7 @@
     state.download.disabled = true;
     state.download.textContent = "准备字幕…";
     try {
-      let entry = state.transcript?.signature === route.signature ? state.transcript : null;
-      if (!entry) {
-        state.settings = await send({ type: "GET_SETTINGS" });
-        if (runId !== state.runId) return;
-        setStatus("正在读取视频信息以下载字幕…");
-        const view = await getBiliJson(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(route.bvid)}`);
-        const page = core.selectPage(view.data, route.page);
-        if (runId !== state.runId) return;
-        state.title.textContent = page.page > 1 ? `${page.title} · P${page.page} ${page.part}` : page.title;
-        const transcript = await loadTranscript(route, page, runId);
-        if (runId !== state.runId) return;
-        requireCompleteTranscript(transcript, page);
-        entry = { signature: route.signature, page, transcript };
-        state.transcript = entry;
-      }
+      const entry = await ensureTranscript(route, runId);
       if (runId !== state.runId || getRoute()?.signature !== route.signature) return;
       const format = state.downloadFormat.value === "txt" ? "txt" : "srt";
       const segments = entry.transcript.segments;
@@ -448,6 +627,8 @@
     const route = getRoute();
     if (!route) return;
     const runId = ++state.runId;
+    let attemptedTranscript = false;
+    state.transcriptPromise = null;
     state.analyze.disabled = true;
     state.transcriptLoading = true;
     state.download.disabled = true;
@@ -474,10 +655,10 @@
           return;
         }
       }
-      const transcript = await loadTranscript(route, page, runId);
+      attemptedTranscript = true;
+      const entry = await ensureTranscript(route, runId, page);
       if (runId !== state.runId) return;
-      requireCompleteTranscript(transcript, page);
-      state.transcript = { signature: route.signature, page, transcript };
+      const transcript = entry.transcript;
       state.transcriptLoading = false;
       state.download.disabled = state.downloadBusy;
       setStatus(`已读取 ${transcript.segments.length} 条文字，覆盖至 ${core.formatTime(transcript.coverage.last)}/${core.formatTime(page.duration)}，开始分析…`);
@@ -498,6 +679,9 @@
         state.analyze.disabled = false;
         state.transcriptLoading = false;
         state.download.disabled = state.downloadBusy;
+        if (state.open && !state.transcript && !attemptedTranscript && !state.transcriptPromise) {
+          ensureTranscript(route, runId).catch(() => {});
+        }
       }
     }
   }
@@ -510,14 +694,19 @@
     state.analyze.disabled = false;
     state.download.disabled = state.downloadBusy;
     state.transcriptLoading = false;
-    state.transcript = null;
+    state.transcriptPromise = null;
+    clearTranscript();
     state.title.textContent = "";
     clearResult();
     setStatus("正在准备视频…");
     try {
       state.settings = await send({ type: "GET_SETTINGS" });
+      if (route.signature !== getRoute()?.signature) return;
       if (state.settings.autoAnalyze) await runAnalysis(false);
-      else setStatus("点击“生成总结与章节”开始分析。");
+      else {
+        setStatus("点击“生成总结与章节”开始分析。");
+        if (state.open) ensureTranscript(route, state.runId).catch(() => {});
+      }
     } catch (error) {
       setStatus(error.message, "error");
     }
@@ -527,6 +716,7 @@
     createUI();
     routeChanged();
     setInterval(routeChanged, 1000);
+    setInterval(updateActiveSubtitle, 250);
     chrome.runtime.onMessage.addListener((message) => {
       if (message?.type === "TOGGLE_PANEL") openPanel(!state.open);
     });

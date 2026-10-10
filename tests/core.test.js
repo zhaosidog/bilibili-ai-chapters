@@ -39,6 +39,24 @@ test("subtitle export preserves millisecond SRT cues and readable TXT timestamps
   assert.equal(core.segmentsToText(segments), "[0:00] 第一行\r\n[1:01:01] 第二行\r\n");
 });
 
+test("active subtitle selection respects starts, ends, and silent gaps", () => {
+  const segments = [
+    { from: 0, to: 4 },
+    { from: 5, to: 10 },
+    { from: 12, to: 16 }
+  ];
+  assert.equal(core.activeSegmentIndex(segments, 0), 0);
+  assert.equal(core.activeSegmentIndex(segments, 3.9), 0);
+  assert.equal(core.activeSegmentIndex(segments, 4), -1);
+  assert.equal(core.activeSegmentIndex(segments, 7), 1);
+  assert.equal(core.activeSegmentIndex(segments, 11), -1);
+  assert.equal(core.activeSegmentIndex(segments, 16), -1);
+  assert.equal(core.activeSegmentIndex([], 2), -1);
+  assert.equal(core.activeSegmentIndex([
+    { from: 0, to: 10 }, { from: 4, to: 5 }
+  ], 6), 0);
+});
+
 test("subtitle filename removes Windows-unsafe characters and marks the video part", () => {
   assert.equal(core.subtitleFilename("标题: 第一/二集? ", "BV1dRYP6oEtB", 2, "srt"),
     "标题_ 第一_二集__BV1dRYP6oEtB_P2.srt");

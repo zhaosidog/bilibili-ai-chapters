@@ -34,8 +34,8 @@
   z-index: 2147483646;
   top: min(80px, 7vh);
   right: 20px;
-  width: min(420px, calc(100vw - 24px));
-  max-height: min(82vh, 900px);
+  width: min(760px, calc(100vw - 24px));
+  height: min(82vh, 900px);
   background: #fff;
   border: 1px solid #dce6ec;
   border-radius: 14px;
@@ -72,9 +72,17 @@
 }
 
 #bili-ai-chapters-root .bili-ai-icon:hover { background: #ffffff44; }
-#bili-ai-chapters-root .bili-ai-body { overflow-y: auto; padding: 16px; }
+#bili-ai-chapters-root .bili-ai-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px;
+}
 
 #bili-ai-chapters-root .bili-ai-video-title {
+  flex: 0 0 auto;
   font-size: 14px;
   font-weight: 700;
   line-height: 1.45;
@@ -82,12 +90,15 @@
 }
 
 #bili-ai-chapters-root .bili-ai-status {
+  flex: 0 0 auto;
   border-radius: 8px;
   padding: 9px 11px;
   color: #36536c;
   background: #edf5fa;
   font-size: 12px;
   overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow-y: auto;
 }
 
 #bili-ai-chapters-root .bili-ai-status[data-kind="error"] {
@@ -102,10 +113,11 @@
 
 #bili-ai-chapters-root .bili-ai-toolbar {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 12px 0 16px;
+  margin: 12px 0;
 }
 
 #bili-ai-chapters-root .bili-ai-analyze,
@@ -136,6 +148,112 @@
 #bili-ai-chapters-root h3 { margin: 15px 0 8px; font-size: 14px; }
 #bili-ai-chapters-root .bili-ai-summary { color: #34495a; white-space: pre-wrap; }
 
+#bili-ai-chapters-root .bili-ai-columns {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+#bili-ai-chapters-root .bili-ai-main-column {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+#bili-ai-chapters-root .bili-ai-transcript-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid #e2ebf0;
+  padding-left: 16px;
+}
+
+#bili-ai-chapters-root .bili-ai-transcript-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bili-ai-chapters-root .bili-ai-transcript-heading h3 { margin-top: 0; }
+#bili-ai-chapters-root .bili-ai-transcript-source {
+  color: #8092a0;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+#bili-ai-chapters-root .bili-ai-follow {
+  border: 1px solid #cce8f2;
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: #007fa8;
+  background: #f1f9fc;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#bili-ai-chapters-root .bili-ai-follow:disabled { opacity: .5; cursor: default; }
+#bili-ai-chapters-root .bili-ai-transcript-notice {
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: #536f82;
+  background: #f1f7fa;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+#bili-ai-chapters-root .bili-ai-transcript-notice[data-kind="error"] {
+  color: #a8372e;
+  background: #fff0ee;
+}
+
+#bili-ai-chapters-root .bili-ai-transcript-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#bili-ai-chapters-root .bili-ai-transcript-list li { margin: 2px 0; }
+#bili-ai-chapters-root .bili-ai-transcript-line {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 7px;
+  padding: 9px 8px;
+  color: #536474;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+#bili-ai-chapters-root .bili-ai-transcript-line:hover { background: #f1f9fc; }
+#bili-ai-chapters-root .bili-ai-transcript-line[data-active="true"] {
+  border-left-color: #00a1d6;
+  color: #133a4d;
+  background: #e7f6fc;
+  font-weight: 700;
+}
+#bili-ai-chapters-root .bili-ai-transcript-time {
+  flex: 0 0 auto;
+  color: #008ebf;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+#bili-ai-chapters-root .bili-ai-transcript-text { min-width: 0; overflow-wrap: anywhere; }
+
 #bili-ai-chapters-root .bili-ai-chapters {
   list-style: none;
   padding: 0;
@@ -164,7 +282,17 @@
 #bili-ai-chapters-root .bili-ai-chapter-title { font-weight: 600; }
 #bili-ai-chapters-root .bili-ai-chapters p { margin: 0 5px 8px 51px; color: #697c8c; font-size: 12px; }
 
-@media (max-width: 600px) {
-  #bili-ai-chapters-root .bili-ai-panel { top: 10px; right: 10px; max-height: 88vh; }
+@media (max-width: 760px) {
+  #bili-ai-chapters-root .bili-ai-panel { top: 10px; right: 10px; height: 88vh; }
+  #bili-ai-chapters-root .bili-ai-body { overflow-y: auto; }
+  #bili-ai-chapters-root .bili-ai-columns { display: block; flex: none; }
+  #bili-ai-chapters-root .bili-ai-main-column { max-height: 32vh; }
+  #bili-ai-chapters-root .bili-ai-transcript-column {
+    border-left: 0;
+    border-top: 1px solid #e2ebf0;
+    margin-top: 12px;
+    padding: 12px 0 0;
+  }
+  #bili-ai-chapters-root .bili-ai-transcript-list { flex: none; height: 35vh; }
   #bili-ai-chapters-root .bili-ai-badge { right: 10px; }
 }
