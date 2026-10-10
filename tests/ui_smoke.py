@@ -87,6 +87,13 @@ def run():
         page.locator(".bili-ai-badge").click()
         assert page.locator(".bili-ai-summary").inner_text() == "这是视频总结。"
         assert page.locator(".bili-ai-chapter-title").inner_text() == "第一章"
+        assert page.locator(".bili-ai-panel").bounding_box()["width"] <= 420
+        assert page.locator(".bili-ai-main-column").is_visible()
+        assert not page.locator(".bili-ai-transcript-column").is_visible()
+        page.locator(".bili-ai-view-tab[data-view='transcript']").click()
+        assert not page.locator(".bili-ai-main-column").is_visible()
+        assert page.locator(".bili-ai-transcript-column").is_visible()
+        assert page.locator(".bili-ai-view-tab[data-view='transcript']").get_attribute("aria-selected") == "true"
         assert page.locator(".bili-ai-transcript-line").count() == 2
         page.locator(".bili-ai-transcript-line[data-index='0'][data-active='true']").wait_for()
         page.evaluate("window.__seek = 4.5")
@@ -95,8 +102,13 @@ def run():
         page.locator(".bili-ai-transcript-line[data-index='1'][data-active='true']").wait_for()
         page.locator(".bili-ai-transcript-line[data-index='0']").click()
         assert page.evaluate("window.__seek") == 0
+        page.locator(".bili-ai-view-tab[data-view='summary']").click()
+        assert page.locator(".bili-ai-main-column").is_visible()
+        assert not page.locator(".bili-ai-transcript-column").is_visible()
         page.locator(".bili-ai-chapter").click()
         assert page.evaluate("window.__seek") == 5
+        page.locator(".bili-ai-view-tab[data-view='transcript']").click()
+        page.locator(".bili-ai-transcript-line[data-index='1'][data-active='true']").wait_for()
         page.evaluate("""() => {
           const oldVideo = document.querySelector('video');
           const replacement = oldVideo.cloneNode();
@@ -124,9 +136,25 @@ def run():
         artifact.mkdir(exist_ok=True)
         page.screenshot(path=str(artifact / "ui-smoke.png"), full_page=True)
         page.set_viewport_size({"width": 600, "height": 900})
-        assert (page.locator(".bili-ai-transcript-column").bounding_box()["y"] >
-                page.locator(".bili-ai-main-column").bounding_box()["y"])
+        assert page.locator(".bili-ai-panel").bounding_box()["width"] <= 420
+        assert page.locator(".bili-ai-transcript-column").is_visible()
+        assert not page.locator(".bili-ai-main-column").is_visible()
+        page.locator(".bili-ai-view-tab[data-view='summary']").click()
+        assert page.locator(".bili-ai-main-column").is_visible()
+        assert not page.locator(".bili-ai-transcript-column").is_visible()
         page.screenshot(path=str(artifact / "ui-mobile-smoke.png"), full_page=True)
+        page.set_viewport_size({"width": 375, "height": 667})
+        page.locator(".bili-ai-video-title").evaluate(
+            "element => element.textContent = '这是一个用于验证窄屏显示的很长视频标题，包含较多文字并需要自动换行'"
+        )
+        page.locator(".bili-ai-status").evaluate(
+            "element => element.textContent = '视频处理状态：' + '字幕正在读取，请稍候。'.repeat(12)"
+        )
+        assert page.locator(".bili-ai-main-column").bounding_box()["height"] > 60
+        page.locator(".bili-ai-view-tab[data-view='transcript']").click()
+        assert page.locator(".bili-ai-transcript-list").bounding_box()["height"] > 60
+        assert page.locator(".bili-ai-download").is_visible()
+        page.screenshot(path=str(artifact / "ui-narrow-smoke.png"), full_page=True)
 
         cached_page = browser.new_page(viewport={"width": 1440, "height": 900})
         cached_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(
@@ -166,6 +194,7 @@ def run():
         cached_page.locator(".bili-ai-badge[data-kind='ready']").wait_for(timeout=10000)
         cached_page.locator(".bili-ai-badge").click()
         assert cached_page.locator(".bili-ai-summary").inner_text() == "缓存的总结"
+        cached_page.locator(".bili-ai-view-tab[data-view='transcript']").click()
         cached_page.locator(".bili-ai-transcript-line").first.wait_for(timeout=10000)
         assert cached_page.locator(".bili-ai-transcript-line").count() == 2
         with cached_page.expect_download() as cached_event:
@@ -202,6 +231,7 @@ def run():
         keyless_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
         keyless_page.locator(".bili-ai-badge[data-kind='error']").wait_for(timeout=10000)
         keyless_page.locator(".bili-ai-badge").click()
+        keyless_page.locator(".bili-ai-view-tab[data-view='transcript']").click()
         keyless_page.locator(".bili-ai-transcript-line").first.wait_for(timeout=10000)
         with keyless_page.expect_download() as keyless_event:
             keyless_page.locator(".bili-ai-download").click()
@@ -283,6 +313,7 @@ def run():
         long_page.locator(".bili-ai-badge[data-kind='ready']").wait_for(timeout=5000)
         assert long_page.locator(".bili-ai-status").inner_text() == "完成：1 个章节。"
         long_page.locator(".bili-ai-badge").click()
+        long_page.locator(".bili-ai-view-tab[data-view='transcript']").click()
         assert long_page.locator(".bili-ai-transcript-line").count() == 12
         long_page.evaluate("""() => {
           const video = document.querySelector('video');

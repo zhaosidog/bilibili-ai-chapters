@@ -34,7 +34,7 @@
   z-index: 2147483646;
   top: min(80px, 7vh);
   right: 20px;
-  width: min(760px, calc(100vw - 24px));
+  width: min(420px, calc(100vw - 24px));
   height: min(82vh, 900px);
   background: #fff;
   border: 1px solid #dce6ec;
@@ -148,17 +148,42 @@
 #bili-ai-chapters-root h3 { margin: 15px 0 8px; font-size: 14px; }
 #bili-ai-chapters-root .bili-ai-summary { color: #34495a; white-space: pre-wrap; }
 
-#bili-ai-chapters-root .bili-ai-columns {
-  display: grid;
+#bili-ai-chapters-root .bili-ai-view-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  border-bottom: 1px solid #e2ebf0;
+  margin-bottom: 8px;
+}
+
+#bili-ai-chapters-root .bili-ai-view-tab {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 7px 10px;
+  color: #62798a;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#bili-ai-chapters-root .bili-ai-view-tab[aria-selected="true"] {
+  border-bottom-color: #00a1d6;
+  color: #007fa8;
+}
+
+#bili-ai-chapters-root .bili-ai-view-tab:hover { background: #f1f9fc; }
+#bili-ai-chapters-root .bili-ai-view-tab:focus-visible { outline: 2px solid #00a1d6; outline-offset: -2px; }
+
+#bili-ai-chapters-root .bili-ai-view-content {
   flex: 1;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
-  gap: 16px;
   min-height: 0;
+  overflow: hidden;
 }
 
 #bili-ai-chapters-root .bili-ai-main-column {
   min-width: 0;
-  min-height: 0;
+  height: 100%;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -167,11 +192,11 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 0;
+  height: 100%;
   overflow: hidden;
-  border-left: 1px solid #e2ebf0;
-  padding-left: 16px;
 }
+
+#bili-ai-chapters-root .bili-ai-view-content > [hidden] { display: none; }
 
 #bili-ai-chapters-root .bili-ai-transcript-heading {
   display: flex;
@@ -284,15 +309,5 @@
 
 @media (max-width: 760px) {
   #bili-ai-chapters-root .bili-ai-panel { top: 10px; right: 10px; height: 88vh; }
-  #bili-ai-chapters-root .bili-ai-body { overflow-y: auto; }
-  #bili-ai-chapters-root .bili-ai-columns { display: block; flex: none; }
-  #bili-ai-chapters-root .bili-ai-main-column { max-height: 32vh; }
-  #bili-ai-chapters-root .bili-ai-transcript-column {
-    border-left: 0;
-    border-top: 1px solid #e2ebf0;
-    margin-top: 12px;
-    padding: 12px 0 0;
-  }
-  #bili-ai-chapters-root .bili-ai-transcript-list { flex: none; height: 35vh; }
   #bili-ai-chapters-root .bili-ai-badge { right: 10px; }
 }

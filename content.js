@@ -13,6 +13,10 @@
     root: null,
     panel: null,
     badge: null,
+    activeView: "summary",
+    viewButtons: null,
+    mainPane: null,
+    transcriptPane: null,
     status: null,
     title: null,
     source: null,
@@ -119,6 +123,19 @@
     }
   }
 
+  function setView(view) {
+    if (view !== "summary" && view !== "transcript") return;
+    state.activeView = view;
+    state.mainPane.hidden = view !== "summary";
+    state.transcriptPane.hidden = view !== "transcript";
+    for (const button of state.viewButtons) {
+      const selected = button.dataset.view === view;
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    }
+    if (view === "transcript" && state.open) updateActiveSubtitle(true);
+  }
+
   function clearResult() {
     state.summary.textContent = "";
     state.chapters.replaceChildren();
@@ -150,14 +167,18 @@
             <button type="button" class="bili-ai-download">下载字幕</button>
             <span class="bili-ai-source"></span>
           </div>
-          <div class="bili-ai-columns">
-            <div class="bili-ai-main-column">
+          <div class="bili-ai-view-tabs" role="tablist" aria-label="内容视图">
+            <button type="button" class="bili-ai-view-tab" id="bili-ai-summary-tab" data-view="summary" role="tab" aria-selected="true" aria-controls="bili-ai-summary-pane">总结与章节</button>
+            <button type="button" class="bili-ai-view-tab" id="bili-ai-transcript-tab" data-view="transcript" role="tab" aria-selected="false" aria-controls="bili-ai-transcript-pane" tabindex="-1">同步字幕</button>
+          </div>
+          <div class="bili-ai-view-content">
+            <div class="bili-ai-main-column" id="bili-ai-summary-pane" role="tabpanel" aria-labelledby="bili-ai-summary-tab">
               <h3>视频总结</h3>
               <div class="bili-ai-summary"></div>
               <h3>主题章节</h3>
               <ol class="bili-ai-chapters"></ol>
             </div>
-            <section class="bili-ai-transcript-column" aria-label="同步字幕">
+            <section class="bili-ai-transcript-column" id="bili-ai-transcript-pane" role="tabpanel" aria-labelledby="bili-ai-transcript-tab" hidden>
               <div class="bili-ai-transcript-heading">
                 <h3>同步字幕</h3>
                 <button type="button" class="bili-ai-follow" disabled>定位当前</button>
@@ -181,10 +202,27 @@
     state.analyze = root.querySelector(".bili-ai-analyze");
     state.download = root.querySelector(".bili-ai-download");
     state.downloadFormat = root.querySelector(".bili-ai-download-format");
+    state.viewButtons = [...root.querySelectorAll(".bili-ai-view-tab")];
+    state.mainPane = root.querySelector(".bili-ai-main-column");
+    state.transcriptPane = root.querySelector(".bili-ai-transcript-column");
     state.transcriptNotice = root.querySelector(".bili-ai-transcript-notice");
     state.transcriptSource = root.querySelector(".bili-ai-transcript-source");
     state.transcriptList = root.querySelector(".bili-ai-transcript-list");
     state.follow = root.querySelector(".bili-ai-follow");
+    for (const button of state.viewButtons) {
+      button.addEventListener("click", () => setView(button.dataset.view));
+      button.addEventListener("keydown", (event) => {
+        const index = state.viewButtons.indexOf(button);
+        const next = event.key === "ArrowRight" ? (index + 1) % state.viewButtons.length
+          : event.key === "ArrowLeft" ? (index + state.viewButtons.length - 1) % state.viewButtons.length
+            : event.key === "Home" ? 0 : event.key === "End" ? state.viewButtons.length - 1 : -1;
+        if (next < 0) return;
+        event.preventDefault();
+        const target = state.viewButtons[next];
+        setView(target.dataset.view);
+        target.focus();
+      });
+    }
     state.badge.addEventListener("click", () => openPanel(!state.open));
     root.querySelector(".bili-ai-close").addEventListener("click", () => openPanel(false));
     root.querySelector(".bili-ai-settings").addEventListener("click", () => {
@@ -288,7 +326,8 @@
 
   function updateActiveSubtitle(force = false) {
     const entry = state.transcript;
-    if (!state.open || !entry || getRoute()?.signature !== entry.signature) return;
+    if (!state.open || state.activeView !== "transcript" || !entry ||
+        getRoute()?.signature !== entry.signature) return;
     const video = mainVideo();
     if (!video) return;
     const index = core.activeSegmentIndex(entry.transcript.segments, video.currentTime);
