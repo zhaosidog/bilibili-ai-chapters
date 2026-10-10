@@ -19,6 +19,11 @@
     summary: null,
     chapters: null,
     analyze: null,
+    download: null,
+    downloadFormat: null,
+    downloadBusy: false,
+    transcriptLoading: false,
+    transcript: null,
     needsReload: false
   };
 
@@ -122,6 +127,11 @@
           <div class="bili-ai-status" role="status" aria-live="polite">正在读取页面…</div>
           <div class="bili-ai-toolbar">
             <button type="button" class="bili-ai-analyze">生成总结与章节</button>
+            <select class="bili-ai-download-format" aria-label="字幕下载格式" title="字幕下载格式">
+              <option value="srt">SRT</option>
+              <option value="txt">TXT</option>
+            </select>
+            <button type="button" class="bili-ai-download">下载字幕</button>
             <span class="bili-ai-source"></span>
           </div>
           <h3>视频总结</h3>
@@ -140,6 +150,8 @@
     state.summary = root.querySelector(".bili-ai-summary");
     state.chapters = root.querySelector(".bili-ai-chapters");
     state.analyze = root.querySelector(".bili-ai-analyze");
+    state.download = root.querySelector(".bili-ai-download");
+    state.downloadFormat = root.querySelector(".bili-ai-download-format");
     state.badge.addEventListener("click", () => openPanel(!state.open));
     root.querySelector(".bili-ai-close").addEventListener("click", () => openPanel(false));
     root.querySelector(".bili-ai-settings").addEventListener("click", () => {
@@ -149,6 +161,7 @@
       if (state.needsReload) window.location.reload();
       else runAnalysis(true);
     });
+    state.download.addEventListener("click", downloadSubtitle);
   }
 
   function seek(seconds) {
@@ -253,6 +266,64 @@
       if (error.code === "EXTENSION_CONTEXT_INVALIDATED") throw error;
       if (subtitleIssue) throw new Error(`${subtitleIssue}；本地语音转写未完成：${error.message}`);
       throw error;
+    }
+  }
+
+  function saveSubtitle(text, filename) {
+    const blob = new Blob(["\ufeff", text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  function requireCompleteTranscript(transcript, page) {
+    if (!transcript.coverage.complete) {
+      throw new Error(`${transcript.source}仅覆盖 ${core.formatTime(transcript.coverage.first)}–${core.formatTime(transcript.coverage.last)}，视频长 ${core.formatTime(page.duration)}；无法取得可靠的全片字幕。首句：「${transcript.segments[0].content.slice(0, 50)}」`);
+    }
+  }
+
+  async function downloadSubtitle() {
+    const route = getRoute();
+    if (!route || state.downloadBusy) return;
+    const runId = state.runId;
+    state.downloadBusy = true;
+    state.download.disabled = true;
+    state.download.textContent = "准备字幕…";
+    try {
+      let entry = state.transcript?.signature === route.signature ? state.transcript : null;
+      if (!entry) {
+        state.settings = await send({ type: "GET_SETTINGS" });
+        if (runId !== state.runId) return;
+        setStatus("正在读取视频信息以下载字幕…");
+        const view = await getBiliJson(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(route.bvid)}`);
+        const page = core.selectPage(view.data, route.page);
+        if (runId !== state.runId) return;
+        state.title.textContent = page.page > 1 ? `${page.title} · P${page.page} ${page.part}` : page.title;
+        const transcript = await loadTranscript(route, page, runId);
+        if (runId !== state.runId) return;
+        requireCompleteTranscript(transcript, page);
+        entry = { signature: route.signature, page, transcript };
+        state.transcript = entry;
+      }
+      if (runId !== state.runId || getRoute()?.signature !== route.signature) return;
+      const format = state.downloadFormat.value === "txt" ? "txt" : "srt";
+      const segments = entry.transcript.segments;
+      const content = format === "txt" ? core.segmentsToText(segments) : core.segmentsToSrt(segments);
+      const filename = core.subtitleFilename(entry.page.title, route.bvid, entry.page.page, format);
+      saveSubtitle(content, filename);
+      setStatus(`已下载 ${format.toUpperCase()} 字幕（${segments.length} 条，${entry.transcript.source}）。`, "ready");
+    } catch (error) {
+      if (runId === state.runId) setStatus(error.message || "字幕下载失败。", "error");
+    } finally {
+      state.downloadBusy = false;
+      state.download.textContent = "下载字幕";
+      state.download.disabled = state.transcriptLoading;
     }
   }
 
@@ -378,6 +449,8 @@
     if (!route) return;
     const runId = ++state.runId;
     state.analyze.disabled = true;
+    state.transcriptLoading = true;
+    state.download.disabled = true;
     clearResult();
     try {
       state.settings = await send({ type: "GET_SETTINGS" });
@@ -403,9 +476,10 @@
       }
       const transcript = await loadTranscript(route, page, runId);
       if (runId !== state.runId) return;
-      if (!transcript.coverage.complete) {
-        throw new Error(`${transcript.source}仅覆盖 ${core.formatTime(transcript.coverage.first)}–${core.formatTime(transcript.coverage.last)}，视频长 ${core.formatTime(page.duration)}；无法可靠生成全片总结。首句：「${transcript.segments[0].content.slice(0, 50)}」`);
-      }
+      requireCompleteTranscript(transcript, page);
+      state.transcript = { signature: route.signature, page, transcript };
+      state.transcriptLoading = false;
+      state.download.disabled = state.downloadBusy;
       setStatus(`已读取 ${transcript.segments.length} 条文字，覆盖至 ${core.formatTime(transcript.coverage.last)}/${core.formatTime(page.duration)}，开始分析…`);
       const result = await makeSummary(transcript.segments, page, runId);
       if (runId !== state.runId) return;
@@ -420,7 +494,11 @@
     } catch (error) {
       if (runId === state.runId) setStatus(error.message || "分析失败。", "error");
     } finally {
-      if (runId === state.runId) state.analyze.disabled = false;
+      if (runId === state.runId) {
+        state.analyze.disabled = false;
+        state.transcriptLoading = false;
+        state.download.disabled = state.downloadBusy;
+      }
     }
   }
 
@@ -430,6 +508,9 @@
     state.route = route.signature;
     state.runId++;
     state.analyze.disabled = false;
+    state.download.disabled = state.downloadBusy;
+    state.transcriptLoading = false;
+    state.transcript = null;
     state.title.textContent = "";
     clearResult();
     setStatus("正在准备视频…");

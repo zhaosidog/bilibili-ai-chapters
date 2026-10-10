@@ -1,6 +1,6 @@
 # B站 AI 视频章节
 
-一个 Chrome / Edge Manifest V3 浏览器扩展：在普通 B 站视频页生成中文总结和可点击的主题章节。点击章节时间会直接跳到视频对应位置。
+一个 Chrome / Edge Manifest V3 浏览器扩展：在普通 B 站视频页生成中文总结和可点击的主题章节。点击章节时间会直接跳到视频对应位置，也可以下载带时间轴的字幕。
 
 ## 安装扩展
 
@@ -8,6 +8,12 @@
 2. 如果使用压缩包，先解压。打开“开发者模式”，选择“加载已解压的扩展程序”，选中包含 `manifest.json` 的目录。
 3. 打开扩展设置，选择智谱 GLM、阿里云百炼千问、DeepSeek 或其他兼容 Chat Completions 的服务，填写对应平台的 API Key 并保存。
 4. 打开任意普通 B 站视频 URL（`https://www.bilibili.com/video/BV...`），点击右侧“AI 章节”。默认会自动分析，也可在设置中关闭自动分析。
+
+## 下载字幕
+
+在视频页打开“AI 章节”，选择 `SRT` 或 `TXT`，点击“下载字幕”。SRT 保留毫秒时间码，可导入播放器；TXT 每行带播放时间，方便阅读和搜索。文件名含视频标题、BV 号，分 P 视频还会标记 P 序号。中文文件使用 UTF-8 编码。
+
+下载复用当前视频已经读取的 B 站字幕或本地语音转写。即使总结来自缓存，也可以单独下载字幕；下载不调用 AI 模型，也不要求先填写模型 API Key。若 B 站字幕明显只覆盖视频开头，扩展会尝试已启用的本地语音转写；没有取得足够字幕时会显示原因，不会把明显不完整的片段当作全片字幕下载。本地语音转写需要先启动 helper。
 
 新安装默认选择国内智谱免费模型 [`glm-4.7-flash`](https://docs.bigmodel.cn/cn/guide/models/free/glm-4.7-flash)，需自行申请 API Key。千问预设使用阿里云百炼北京地域的 [`qwen3.5-35b-a3b`](https://help.aliyun.com/zh/model-studio/qwen3-5-35b-a3b) 和兼容地址 `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`。阿里云[推荐业务空间专属域名](https://help.aliyun.com/zh/model-studio/beijing-access-information)；可在设置中将请求地址改为 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`，用百炼控制台显示的实际 WorkspaceId 替换占位符。北京地域的 API Key 与其他地域不能混用。千问为计费模型，价格以百炼控制台为准。
 
@@ -19,7 +25,7 @@ DeepSeek 预设仍使用 `deepseek-flash`。模型名称、请求地址和 JSON 
 
 普通字幕与 B 站 AI 字幕均可读取。更新扩展文件后，请在浏览器的扩展管理页点击本扩展的“重新加载”，再刷新视频页。
 
-如果安装的是此前解压的副本，GitHub 源码更新不会自动替换那份文件。请先用新版文件覆盖 Chrome 加载的目录，再点“重新加载”，并确认扩展卡片显示版本 `0.1.4`。从源码生成安装包可运行 `python scripts/package_extension.py`，输出到 `dist/bilibili-ai-chapters.zip`。
+如果安装的是此前解压的副本，GitHub 源码更新不会自动替换那份文件。请先用新版文件覆盖 Chrome 加载的目录，再点“重新加载”，并确认扩展卡片显示版本 `0.1.5`。从源码生成安装包可运行 `python scripts/package_extension.py`，输出到 `dist/bilibili-ai-chapters.zip`。
 
 如果扩展在本地转写过程中被更新或重新加载，旧视频页会失去扩展连接。面板会提供“刷新页面继续”按钮；helper 内正在运行的转写会继续，刷新后插件会接续同一任务或读取已完成的缓存。
 

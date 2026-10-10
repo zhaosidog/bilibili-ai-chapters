@@ -89,9 +89,99 @@ def run():
         assert page.locator(".bili-ai-chapter-title").inner_text() == "第一章"
         page.locator(".bili-ai-chapter").click()
         assert page.evaluate("window.__seek") == 5
+        with page.expect_download() as srt_event:
+            page.locator(".bili-ai-download").click()
+        srt = srt_event.value
+        assert srt.suggested_filename == f"测试视频_{BVID}.srt"
+        srt_text = Path(srt.path()).read_bytes().decode("utf-8-sig")
+        assert "1\r\n00:00:00,000 --> 00:00:04,000\r\n介绍主题" in srt_text
+        page.locator(".bili-ai-download-format").select_option("txt")
+        with page.expect_download() as txt_event:
+            page.locator(".bili-ai-download").click()
+        txt = txt_event.value
+        assert txt.suggested_filename == f"测试视频_{BVID}.txt"
+        assert Path(txt.path()).read_bytes().decode("utf-8-sig") == (
+            "[0:00] 介绍主题\r\n[0:05] 第一章内容\r\n")
         artifact = ROOT / "artifacts"
         artifact.mkdir(exist_ok=True)
         page.screenshot(path=str(artifact / "ui-smoke.png"), full_page=True)
+
+        cached_page = browser.new_page(viewport={"width": 1440, "height": 900})
+        cached_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(
+            status=200, content_type="text/html", body="<html><body><video></video></body></html>",
+        ))
+        cached_page.route("https://api.bilibili.com/**", api)
+        cached_page.route("https://aisubtitle.hdslb.com/**", lambda route: route.fulfill(
+            status=200, content_type="application/json", headers=CORS,
+            body=json.dumps({"body": [
+                {"from": 0, "to": 4, "content": "缓存视频开场"},
+                {"from": 90, "to": 98, "content": "缓存视频结尾"},
+            ]}),
+        ))
+        cached_page.add_init_script("""
+          window.__modelCalls = 0;
+          window.chrome = {runtime: {
+            lastError: null,
+            onMessage: {addListener: () => {}},
+            sendMessage(message, callback) {
+              if (message.type === 'GET_SETTINGS') return callback({ok: true, result: {
+                configured: true, autoAnalyze: true, localAsrEnabled: false,
+                profileId: 'cached-smoke', model: 'test'
+              }});
+              if (message.type === 'GET_CACHE') return callback({ok: true, result: {
+                title: '测试视频', source: 'B 站字幕（中文）', result: {
+                  summary: '缓存的总结', chapters: [{start: 0, title: '开场'}]
+                }
+              }});
+              if (message.type === 'MODEL_CALL') window.__modelCalls++;
+              callback({ok: true, result: null});
+            }
+          }};
+        """)
+        cached_page.goto(f"https://www.bilibili.com/video/{BVID}/")
+        cached_page.add_script_tag(content=(ROOT / "lib/core.js").read_text(encoding="utf-8"))
+        cached_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
+        cached_page.locator(".bili-ai-badge[data-kind='ready']").wait_for(timeout=10000)
+        cached_page.locator(".bili-ai-badge").click()
+        assert cached_page.locator(".bili-ai-summary").inner_text() == "缓存的总结"
+        with cached_page.expect_download() as cached_event:
+            cached_page.locator(".bili-ai-download").click()
+        cached_text = Path(cached_event.value.path()).read_bytes().decode("utf-8-sig")
+        assert "缓存视频结尾" in cached_text
+        assert cached_page.evaluate("window.__modelCalls") == 0
+        cached_page.close()
+
+        keyless_page = browser.new_page(viewport={"width": 1440, "height": 900})
+        keyless_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(
+            status=200, content_type="text/html", body="<html><body><video></video></body></html>",
+        ))
+        keyless_page.route("https://api.bilibili.com/**", api)
+        keyless_page.route("https://aisubtitle.hdslb.com/**", lambda route: route.fulfill(
+            status=200, content_type="application/json", headers=CORS,
+            body=json.dumps({"body": [{"from": 0, "to": 90, "content": "无需模型密钥的字幕"}]}),
+        ))
+        keyless_page.add_init_script("""
+          window.chrome = {runtime: {
+            lastError: null,
+            onMessage: {addListener: () => {}},
+            sendMessage(message, callback) {
+              if (message.type === 'GET_SETTINGS') return callback({ok: true, result: {
+                configured: false, autoAnalyze: true, localAsrEnabled: false
+              }});
+              if (message.type === 'MODEL_CALL') throw new Error('download called model');
+              callback({ok: true, result: null});
+            }
+          }};
+        """)
+        keyless_page.goto(f"https://www.bilibili.com/video/{BVID}/")
+        keyless_page.add_script_tag(content=(ROOT / "lib/core.js").read_text(encoding="utf-8"))
+        keyless_page.add_script_tag(content=(ROOT / "content.js").read_text(encoding="utf-8"))
+        keyless_page.locator(".bili-ai-badge[data-kind='error']").wait_for(timeout=10000)
+        keyless_page.locator(".bili-ai-badge").click()
+        with keyless_page.expect_download() as keyless_event:
+            keyless_page.locator(".bili-ai-download").click()
+        assert "无需模型密钥的字幕" in Path(keyless_event.value.path()).read_bytes().decode("utf-8-sig")
+        keyless_page.close()
 
         long_page = browser.new_page(viewport={"width": 1440, "height": 900})
         long_page.route("https://www.bilibili.com/video/**", lambda route: route.fulfill(

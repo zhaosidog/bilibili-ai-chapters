@@ -103,11 +103,13 @@
 #bili-ai-chapters-root .bili-ai-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 12px 0 16px;
 }
 
-#bili-ai-chapters-root .bili-ai-analyze {
+#bili-ai-chapters-root .bili-ai-analyze,
+#bili-ai-chapters-root .bili-ai-download {
   border: 0;
   border-radius: 8px;
   padding: 9px 12px;
@@ -118,8 +120,19 @@
   white-space: nowrap;
 }
 
-#bili-ai-chapters-root .bili-ai-analyze:disabled { opacity: .55; cursor: wait; }
-#bili-ai-chapters-root .bili-ai-source { color: #8092a0; font-size: 11px; }
+#bili-ai-chapters-root .bili-ai-download { background: #e8f6fb; color: #007fa8; }
+#bili-ai-chapters-root .bili-ai-download-format {
+  border: 1px solid #d2e3ec;
+  border-radius: 8px;
+  padding: 8px 6px;
+  color: #17212e;
+  background: white;
+  font: inherit;
+  cursor: pointer;
+}
+#bili-ai-chapters-root .bili-ai-analyze:disabled,
+#bili-ai-chapters-root .bili-ai-download:disabled { opacity: .55; cursor: wait; }
+#bili-ai-chapters-root .bili-ai-source { flex-basis: 100%; color: #8092a0; font-size: 11px; }
 #bili-ai-chapters-root h3 { margin: 15px 0 8px; font-size: 14px; }
 #bili-ai-chapters-root .bili-ai-summary { color: #34495a; white-space: pre-wrap; }
 

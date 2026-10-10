@@ -28,6 +28,24 @@ test("subtitle parsing sorts rows and rejects invalid or out-of-range timestamps
   ]);
 });
 
+test("subtitle export preserves millisecond SRT cues and readable TXT timestamps", () => {
+  const segments = [
+    { from: 0.125, to: 2.5, content: "第一行" },
+    { from: 3661.007, to: 3662.25, content: "第二行" }
+  ];
+  assert.equal(core.segmentsToSrt(segments),
+    "1\r\n00:00:00,125 --> 00:00:02,500\r\n第一行\r\n\r\n" +
+    "2\r\n01:01:01,007 --> 01:01:02,250\r\n第二行\r\n");
+  assert.equal(core.segmentsToText(segments), "[0:00] 第一行\r\n[1:01:01] 第二行\r\n");
+});
+
+test("subtitle filename removes Windows-unsafe characters and marks the video part", () => {
+  assert.equal(core.subtitleFilename("标题: 第一/二集? ", "BV1dRYP6oEtB", 2, "srt"),
+    "标题_ 第一_二集__BV1dRYP6oEtB_P2.srt");
+  assert.equal(core.subtitleFilename("  ", "BV1dRYP6oEtB", 1, "txt"),
+    "视频字幕_BV1dRYP6oEtB.txt");
+});
+
 test("chunked transcript preserves time marks and sequence", () => {
   const rows = Array.from({ length: 10 }, (_, i) => ({
     from: i * 10, to: i * 10 + 5, content: `内容${i}`.repeat(30)
