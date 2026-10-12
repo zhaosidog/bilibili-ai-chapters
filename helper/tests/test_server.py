@@ -36,6 +36,52 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(server.ClientError):
                 server.validate_request(payload)
 
+    def test_youtube_request_accepts_only_video_id(self):
+        video = server.parse_video_request({"youtubeId": "dQw4w9WgXcQ"})
+        self.assertEqual(video, server.VideoRequest(None, youtube_id="dQw4w9WgXcQ"))
+        self.assertEqual(video.platform, "youtube")
+        self.assertEqual(server.parse_video_request({"bvid": "BV1dRYP6oEtB"}).platform, "bilibili")
+
+    def test_youtube_request_rejects_urls_and_mixed_fields(self):
+        invalid = [
+            {"youtubeId": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+            {"youtubeId": "dQw4w9WgXc"},
+            {"youtubeId": "dQw4w9WgXcQ;"},
+            {"youtubeId": "dQw4w9WgXcQ", "bvid": "BV1dRYP6oEtB"},
+            {"youtubeId": "dQw4w9WgXcQ", "p": 1},
+            {"youtubeId": 123},
+        ]
+        for payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(server.ClientError):
+                server.parse_video_request(payload)
+
+    def test_youtube_cache_has_distinct_platform_identity(self):
+        bili = server.VideoRequest("BV1dRYP6oEtB", 1)
+        youtube = server.VideoRequest(None, youtube_id="dQw4w9WgXcQ")
+        segments = [{"from": 0, "to": 1, "content": "hello"}]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            server.write_cache(root, bili, segments)
+            server.write_cache(root, youtube, segments)
+            self.assertNotEqual(server.cache_path(root, bili), server.cache_path(root, youtube))
+            self.assertEqual(server.read_cache(root, bili), segments)
+            self.assertEqual(server.read_cache(root, youtube), segments)
+            self.assertIsNone(server.read_cache(root, server.VideoRequest(None, youtube_id="dQw4w9WgXcR")))
+            cached = json.loads(server.cache_path(root, youtube).read_text(encoding="utf-8"))
+            self.assertEqual(cached["platform"], "youtube")
+            self.assertEqual(cached["youtubeId"], youtube.youtube_id)
+
+    def test_youtube_metadata_id_must_match_before_download(self):
+        video = server.VideoRequest(None, youtube_id="dQw4w9WgXcQ")
+        canonical = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        with patch.object(server, "_check_dependencies"), \
+             patch.object(server, "_run_metadata", return_value={"id": "differentId", "duration": 10}) as metadata, \
+             patch.object(server, "_download_audio") as download:
+            with self.assertRaisesRegex(server.ClientError, "different YouTube video"):
+                server.transcribe_video(video, lambda *_: None)
+            metadata.assert_called_once_with(canonical)
+            download.assert_not_called()
+
     def test_origin_policy(self):
         self.assertTrue(server.allowed_origin(None))
         self.assertTrue(server.allowed_origin("chrome-extension://" + "a" * 32))
@@ -103,6 +149,23 @@ class HttpTests(unittest.TestCase):
         status, cached = self._request("/transcribe", {"bvid": "BV1dRYP6oEtB", "p": 1})
         self.assertEqual(status, 200)
         self.assertEqual(cached["segments"], job["segments"])
+
+    def test_youtube_http_job_and_cache(self):
+        request = {"youtubeId": "dQw4w9WgXcQ"}
+        status, first = self._request("/transcribe", request)
+        self.assertEqual(status, 202)
+        self.manager.pending.join()
+        status, job = self._request("/jobs/" + first["job_id"])
+        self.assertEqual(status, 200)
+        self.assertEqual(job["status"], "done")
+        status, cached = self._request("/transcribe", request)
+        self.assertEqual(status, 200)
+        self.assertEqual(cached["segments"], job["segments"])
+
+    def test_youtube_http_rejects_mixed_ids(self):
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self._request("/transcribe", {"youtubeId": "dQw4w9WgXcQ", "bvid": "BV1dRYP6oEtB"})
+        self.assertEqual(error.exception.code, 400)
 
     def test_forbidden_origin(self):
         with self.assertRaises(urllib.error.HTTPError) as error:

@@ -140,16 +140,28 @@ async function localAsr(message) {
   const config = await settings();
   if (!config.localAsrEnabled) throw new Error("本地语音转写尚未启用。");
   const bvid = String(message.bvid || "");
-  if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) throw new Error("视频 BV 号无效。");
+  const youtubeId = String(message.youtubeId || "");
+  if (youtubeId) {
+    if (bvid || !/^[A-Za-z0-9_-]{11}$/.test(youtubeId)) throw new Error("YouTube 视频 ID 无效。");
+  } else if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) {
+    throw new Error("视频 BV 号无效。");
+  }
   const base = "http://127.0.0.1:8765";
   let path;
   let init;
   if (message.action === "start") {
-    const page = Math.floor(Number(message.page) || 1);
-    if (page < 1 || page > 1000) throw new Error("视频分 P 无效。");
     path = "/transcribe";
+    let payload;
+    if (youtubeId) {
+      if (message.page != null) throw new Error("YouTube 视频没有分 P 参数。");
+      payload = { youtubeId };
+    } else {
+      const page = Math.floor(Number(message.page) || 1);
+      if (page < 1 || page > 1000) throw new Error("视频分 P 无效。");
+      payload = { bvid, p: page };
+    }
     init = { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bvid, p: page }) };
+      body: JSON.stringify(payload) };
   } else if (message.action === "poll" && /^[a-z0-9_-]{1,100}$/i.test(message.jobId || "")) {
     path = `/jobs/${encodeURIComponent(message.jobId)}`;
     init = { method: "GET" };
@@ -176,14 +188,14 @@ async function localAsr(message) {
 
 async function getCache(key) {
   await storageReady;
-  if (!/^BV[0-9A-Za-z]{10}:\d{1,4}:.{1,120}$/.test(String(key || ""))) return null;
+  if (!/^(?:BV[0-9A-Za-z]{10}:\d{1,4}|yt:[A-Za-z0-9_-]{11}):.{1,120}$/.test(String(key || ""))) return null;
   const saved = await chrome.storage.local.get("summaryCache");
   return saved.summaryCache?.[key] || null;
 }
 
 async function putCache(key, value) {
   await storageReady;
-  if (!/^BV[0-9A-Za-z]{10}:\d{1,4}:.{1,120}$/.test(String(key || ""))) return;
+  if (!/^(?:BV[0-9A-Za-z]{10}:\d{1,4}|yt:[A-Za-z0-9_-]{11}):.{1,120}$/.test(String(key || ""))) return;
   const saved = await chrome.storage.local.get("summaryCache");
   const cache = saved.summaryCache || {};
   cache[key] = { ...value, savedAt: Date.now() };
@@ -210,7 +222,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
-  if (tab.id && /^https:\/\/www\.bilibili\.com\/video\//.test(tab.url || "")) {
+  const url = new URL(tab.url || "about:blank");
+  const biliVideo = url.hostname === "www.bilibili.com" && /^\/video\/BV[0-9A-Za-z]{10}/.test(url.pathname);
+  const youtubeVideo = url.hostname === "www.youtube.com" && url.pathname === "/watch" &&
+    /^[A-Za-z0-9_-]{11}$/.test(url.searchParams.get("v") || "");
+  if (tab.id && (biliVideo || youtubeVideo)) {
     try { await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_PANEL" }); return; } catch { /* page still loading */ }
   }
   await chrome.runtime.openOptionsPage();

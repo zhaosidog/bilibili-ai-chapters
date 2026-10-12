@@ -1,4 +1,4 @@
-"""Optional loopback ASR service for Bilibili AI Summary.
+"""Optional loopback ASR service for Bilibili and YouTube videos.
 
 Run with ``python server.py`` after installing requirements.txt and ffmpeg.
 The browser extension never sends arbitrary media URLs to this service.
@@ -46,6 +46,7 @@ LANGUAGE = None if _language_setting in {"", "auto"} else _language_setting
 DEVICE = os.environ.get("BILI_ASR_DEVICE", "cpu")
 COMPUTE_TYPE = os.environ.get("BILI_ASR_COMPUTE_TYPE", "int8")
 BVID_RE = re.compile(r"^BV[a-zA-Z0-9]{10}$")
+YOUTUBE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 ORIGIN_RE = re.compile(r"^chrome-extension://[a-p]{32}$")
 JOB_RE = re.compile(r"^/jobs/([0-9a-f]{32})$")
 
@@ -60,8 +61,13 @@ class QueueFullError(ClientError):
 
 @dataclass(frozen=True)
 class VideoRequest:
-    bvid: str
-    page: int
+    bvid: str | None
+    page: int = 1
+    youtube_id: str | None = None
+
+    @property
+    def platform(self) -> str:
+        return "youtube" if self.youtube_id is not None else "bilibili"
 
 
 def _positive_int(value: Any, name: str, maximum: int) -> int:
@@ -84,6 +90,19 @@ def validate_request(payload: Any) -> tuple[str, int | None, int | None]:
     page = _positive_int(payload["p"], "p", 1000) if "p" in payload else None
     cid = _positive_int(payload["cid"], "cid", 9_007_199_254_740_991) if "cid" in payload else None
     return bvid, page, cid
+
+
+def parse_video_request(payload: Any) -> VideoRequest:
+    """Accept only platform IDs, never a client-supplied download URL."""
+    if isinstance(payload, dict) and "youtubeId" in payload:
+        if set(payload) != {"youtubeId"}:
+            raise ClientError("youtubeId cannot be combined with other request fields")
+        youtube_id = payload["youtubeId"]
+        if not isinstance(youtube_id, str) or not YOUTUBE_ID_RE.fullmatch(youtube_id):
+            raise ClientError("youtubeId must be an 11-character YouTube video id")
+        return VideoRequest(None, youtube_id=youtube_id)
+    bvid, page, cid = validate_request(payload)
+    return VideoRequest(bvid, resolve_page(bvid, cid) if cid is not None else page or 1)
 
 
 def allowed_origin(origin: str | None) -> bool:
@@ -127,6 +146,8 @@ def cache_root() -> Path:
 def cache_path(root: Path, video: VideoRequest) -> Path:
     config = json.dumps([MODEL, LANGUAGE], ensure_ascii=False).encode("utf-8")
     suffix = hashlib.sha256(config).hexdigest()[:12]
+    if video.youtube_id is not None:
+        return root / f"youtube_{video.youtube_id}_{suffix}.json"
     return root / f"{video.bvid}_p{video.page}_{suffix}.json"
 
 
@@ -138,7 +159,12 @@ def read_cache(root: Path, video: VideoRequest) -> list[dict[str, Any]] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or data.get("version") != 1 or data.get("bvid") != video.bvid or data.get("p") != video.page:
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return None
+    if video.youtube_id is not None:
+        if data.get("platform") != "youtube" or data.get("youtubeId") != video.youtube_id:
+            return None
+    elif data.get("bvid") != video.bvid or data.get("p") != video.page:
         return None
     segments = data.get("segments")
     if not isinstance(segments, list):
@@ -154,8 +180,13 @@ def write_cache(root: Path, video: VideoRequest, segments: list[dict[str, Any]])
     target = cache_path(root, video)
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     try:
+        identity = (
+            {"platform": "youtube", "youtubeId": video.youtube_id}
+            if video.youtube_id is not None
+            else {"bvid": video.bvid, "p": video.page}
+        )
         temporary.write_text(
-            json.dumps({"version": 1, "bvid": video.bvid, "p": video.page, "segments": segments}, ensure_ascii=False),
+            json.dumps({"version": 1, **identity, "segments": segments}, ensure_ascii=False),
             encoding="utf-8",
         )
         os.replace(temporary, target)
@@ -281,15 +312,23 @@ def _get_model():
 
 def transcribe_video(video: VideoRequest, update: Callable[[int, str], None]) -> list[dict[str, Any]]:
     _check_dependencies()
-    url = f"https://www.bilibili.com/video/{video.bvid}/?p={video.page}"
+    url = (
+        f"https://www.youtube.com/watch?v={video.youtube_id}"
+        if video.youtube_id is not None
+        else f"https://www.bilibili.com/video/{video.bvid}/?p={video.page}"
+    )
     update(5, "reading metadata")
     metadata = _run_metadata(url)
-    expected_ids = {video.bvid, f"{video.bvid}_p{video.page}"}
-    if metadata.get("id") not in expected_ids or (video.page > 1 and metadata.get("id") == video.bvid):
-        raise ClientError("yt-dlp returned a different Bilibili page")
+    if video.youtube_id is not None:
+        if metadata.get("id") != video.youtube_id:
+            raise ClientError("yt-dlp returned a different YouTube video")
+    else:
+        expected_ids = {video.bvid, f"{video.bvid}_p{video.page}"}
+        if metadata.get("id") not in expected_ids or (video.page > 1 and metadata.get("id") == video.bvid):
+            raise ClientError("yt-dlp returned a different Bilibili page")
     duration = float(metadata["duration"])
     update(10, "downloading audio")
-    with tempfile.TemporaryDirectory(prefix="bili-ai-asr-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="video-ai-asr-") as temporary:
         audio = _download_audio(url, Path(temporary), update)
         update(25, "loading ASR model")
         model = _get_model()
@@ -484,8 +523,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             payload = json.loads(self.rfile.read(length))
-            bvid, page, cid = validate_request(payload)
-            video = VideoRequest(bvid, resolve_page(bvid, cid) if cid is not None else page or 1)
+            video = parse_video_request(payload)
             data, status = self.manager.submit(video)
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
@@ -503,7 +541,7 @@ def main() -> None:
     Handler.manager = JobManager()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
-    print(f"Bilibili local ASR listening on http://{HOST}:{PORT}", flush=True)
+    print(f"Video local ASR listening on http://{HOST}:{PORT}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

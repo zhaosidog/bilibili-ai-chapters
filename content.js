@@ -41,10 +41,19 @@
   };
 
   function getRoute() {
-    const match = location.pathname.match(/^\/video\/(BV[0-9A-Za-z]{10})/i);
-    if (!match) return null;
-    const page = Math.max(1, Math.floor(Number(new URLSearchParams(location.search).get("p")) || 1));
-    return { bvid: match[1], page, signature: `${match[1]}:${page}` };
+    if (location.hostname === "www.bilibili.com") {
+      const match = location.pathname.match(/^\/video\/(BV[0-9A-Za-z]{10})/i);
+      if (!match) return null;
+      const page = Math.max(1, Math.floor(Number(new URLSearchParams(location.search).get("p")) || 1));
+      return { platform: "bilibili", bvid: match[1], page, signature: `${match[1]}:${page}` };
+    }
+    if (location.hostname === "www.youtube.com" && location.pathname === "/watch") {
+      const videoId = new URLSearchParams(location.search).get("v");
+      if (/^[A-Za-z0-9_-]{11}$/.test(videoId || "")) {
+        return { platform: "youtube", videoId, page: 1, signature: `yt:${videoId}` };
+      }
+    }
+    return null;
   }
 
   function requestError(error) {
@@ -88,6 +97,112 @@
     } catch {
       return send({ type: "BILI_GET", url });
     }
+  }
+
+  function youtubeBootstrap(text, videoId) {
+    return {
+      key: text.match(/"INNERTUBE_API_KEY"\s*:\s*"([A-Za-z0-9_-]{20,80})"/)?.[1] || null,
+      clientVersion: text.match(/"INNERTUBE_CLIENT_VERSION"\s*:\s*"([0-9.]{5,40})"/)?.[1] || null,
+      player: core.embeddedYouTubePlayerResponse(text, videoId)
+    };
+  }
+
+  async function getYouTubePage(route) {
+    let key = null;
+    let clientVersion = null;
+    let webPlayer = null;
+    for (const script of document.scripts) {
+      const source = script.textContent || "";
+      if (!source.includes("INNERTUBE_API_KEY") && !source.includes("INNERTUBE_CLIENT_VERSION") &&
+          !source.includes("ytInitialPlayerResponse")) continue;
+      const found = youtubeBootstrap(source, route.videoId);
+      key ||= found.key;
+      clientVersion ||= found.clientVersion;
+      webPlayer ||= found.player;
+      if (key && clientVersion && webPlayer) break;
+    }
+    const readWatchPage = async () => {
+      const response = await fetch(`https://www.youtube.com/watch?v=${route.videoId}`, {
+        credentials: "include"
+      });
+      if (!response.ok) throw new Error(`YouTube 视频页读取失败（HTTP ${response.status}）。`);
+      const html = await response.text();
+      const found = youtubeBootstrap(html, route.videoId);
+      key ||= found.key;
+      clientVersion ||= found.clientVersion;
+      webPlayer ||= found.player;
+    };
+    if (!key) {
+      try { await readWatchPage(); }
+      catch (error) { if (!webPlayer) throw error; }
+    }
+    let alternatePlayer = null;
+    if (key) {
+      try {
+        const client = {
+          clientName: "VISIONOS", clientVersion: "1.02", deviceMake: "Apple",
+          deviceModel: "RealityDevice17,1",
+          userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+          osName: "visionOS", osVersion: "26.5.23O471"
+        };
+        const response = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(key)}`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json", "X-Youtube-Client-Name": "101",
+            "X-Youtube-Client-Version": client.clientVersion },
+          body: JSON.stringify({ videoId: route.videoId, context: { client } })
+        });
+        if (response.ok) {
+          const player = await response.json();
+          if (player?.videoDetails?.videoId === route.videoId) alternatePlayer = player;
+        }
+      } catch { /* the webpage player response remains a fallback */ }
+    }
+    if (!alternatePlayer && !webPlayer && key) await readWatchPage();
+    const player = alternatePlayer || webPlayer;
+    if (!player) throw new Error("无法读取这个 YouTube 视频的信息。请刷新视频页后重试。");
+    const duration = Number(player.videoDetails?.lengthSeconds || webPlayer?.videoDetails?.lengthSeconds);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error("这个 YouTube 视频的时长未知；暂不支持直播或未加载完成的视频。");
+    }
+    const title = String(player.videoDetails?.title || webPlayer?.videoDetails?.title || "YouTube 视频");
+    const tracks = [alternatePlayer, webPlayer].flatMap((item) =>
+      item?.captions?.playerCaptionsTracklistRenderer?.captionTracks || []);
+    return { videoId: route.videoId, title, part: "", page: 1, duration,
+      clientVersion: clientVersion || "2.20261009.01.00",
+      captionTracks: core.pickYouTubeCaptionTracks(tracks).slice(0, 12) };
+  }
+
+  async function getVideoPage(route) {
+    if (route.platform === "youtube") return getYouTubePage(route);
+    const view = await getBiliJson(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(route.bvid)}`);
+    return core.selectPage(view.data, route.page);
+  }
+
+  function youtubeCaptionUrl(value, videoId) {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "www.youtube.com" || url.port ||
+        url.pathname !== "/api/timedtext" || url.username || url.password ||
+        url.searchParams.get("v") !== videoId) {
+      throw new Error("字幕地址不属于当前 YouTube 视频。");
+    }
+    url.searchParams.set("fmt", "json3");
+    return url.href;
+  }
+
+  async function youtubePanelTranscript(route, page) {
+    const bytes = [0xaa, 0x09, 0x0f, 0x0a, 0x0b,
+      ...[...route.videoId].map((char) => char.charCodeAt(0)), 0x18, 0x02];
+    const params = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const response = await fetch("https://www.youtube.com/youtubei/v1/get_panel", {
+      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context: { client: {
+        clientName: "WEB", clientVersion: page.clientVersion
+      } }, panelId: "PAmodern_transcript_view", params })
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    if (!text || text.length > 15_000_000) throw new Error("转写文稿为空或过大");
+    return core.youtubePanelSegments(JSON.parse(text), page.duration);
   }
 
   function subtitleUrl(value) {
@@ -143,53 +258,83 @@
   }
 
   function createUI() {
-    const root = document.createElement("div");
+    const node = (tag, className = "", content = "", attributes = {}) => {
+      const item = document.createElement(tag);
+      if (className) item.className = className;
+      if (content) item.textContent = content;
+      for (const [name, value] of Object.entries(attributes)) item.setAttribute(name, value);
+      return item;
+    };
+    const root = node("div");
     root.id = "bili-ai-chapters-root";
-    root.innerHTML = `
-      <button class="bili-ai-badge" type="button" aria-label="打开 AI 视频章节" aria-expanded="false">AI 章节</button>
-      <section class="bili-ai-panel" aria-label="AI 视频章节" hidden>
-        <header class="bili-ai-header">
-          <div><strong>AI 视频章节</strong><span class="bili-ai-subtitle">总结 · 章节 · 同步字幕</span></div>
-          <div class="bili-ai-header-actions">
-            <button type="button" class="bili-ai-icon bili-ai-settings" title="模型设置" aria-label="模型设置">⚙</button>
-            <button type="button" class="bili-ai-icon bili-ai-close" title="收起" aria-label="收起">×</button>
-          </div>
-        </header>
-        <div class="bili-ai-body">
-          <div class="bili-ai-video-title"></div>
-          <div class="bili-ai-status" role="status" aria-live="polite">正在读取页面…</div>
-          <div class="bili-ai-toolbar">
-            <button type="button" class="bili-ai-analyze">生成总结与章节</button>
-            <select class="bili-ai-download-format" aria-label="字幕下载格式" title="字幕下载格式">
-              <option value="srt">SRT</option>
-              <option value="txt">TXT</option>
-            </select>
-            <button type="button" class="bili-ai-download">下载字幕</button>
-            <span class="bili-ai-source"></span>
-          </div>
-          <div class="bili-ai-view-tabs" role="tablist" aria-label="内容视图">
-            <button type="button" class="bili-ai-view-tab" id="bili-ai-summary-tab" data-view="summary" role="tab" aria-selected="true" aria-controls="bili-ai-summary-pane">总结与章节</button>
-            <button type="button" class="bili-ai-view-tab" id="bili-ai-transcript-tab" data-view="transcript" role="tab" aria-selected="false" aria-controls="bili-ai-transcript-pane" tabindex="-1">同步字幕</button>
-          </div>
-          <div class="bili-ai-view-content">
-            <div class="bili-ai-main-column" id="bili-ai-summary-pane" role="tabpanel" aria-labelledby="bili-ai-summary-tab">
-              <h3>视频总结</h3>
-              <div class="bili-ai-summary"></div>
-              <h3>主题章节</h3>
-              <ol class="bili-ai-chapters"></ol>
-            </div>
-            <section class="bili-ai-transcript-column" id="bili-ai-transcript-pane" role="tabpanel" aria-labelledby="bili-ai-transcript-tab" hidden>
-              <div class="bili-ai-transcript-heading">
-                <h3>同步字幕</h3>
-                <button type="button" class="bili-ai-follow" disabled>定位当前</button>
-              </div>
-              <div class="bili-ai-transcript-source"></div>
-              <div class="bili-ai-transcript-notice" role="status">打开面板后读取字幕…</div>
-              <ol class="bili-ai-transcript-list" aria-label="字幕列表"></ol>
-            </section>
-          </div>
-        </div>
-      </section>`;
+    const badge = node("button", "bili-ai-badge", "AI 章节", {
+      type: "button", "aria-label": "打开 AI 视频章节", "aria-expanded": "false"
+    });
+    const panel = node("section", "bili-ai-panel", "", { "aria-label": "AI 视频章节" });
+    panel.hidden = true;
+    const header = node("header", "bili-ai-header");
+    const heading = node("div");
+    heading.append(node("strong", "", "AI 视频章节"),
+      node("span", "bili-ai-subtitle", "总结 · 章节 · 同步字幕"));
+    const headerActions = node("div", "bili-ai-header-actions");
+    headerActions.append(
+      node("button", "bili-ai-icon bili-ai-settings", "⚙", {
+        type: "button", title: "模型设置", "aria-label": "模型设置"
+      }),
+      node("button", "bili-ai-icon bili-ai-close", "×", {
+        type: "button", title: "收起", "aria-label": "收起"
+      })
+    );
+    header.append(heading, headerActions);
+    const body = node("div", "bili-ai-body");
+    const toolbar = node("div", "bili-ai-toolbar");
+    const downloadFormat = node("select", "bili-ai-download-format", "", {
+      "aria-label": "字幕下载格式", title: "字幕下载格式"
+    });
+    downloadFormat.append(node("option", "", "SRT", { value: "srt" }),
+      node("option", "", "TXT", { value: "txt" }));
+    toolbar.append(
+      node("button", "bili-ai-analyze", "生成总结与章节", { type: "button" }),
+      downloadFormat,
+      node("button", "bili-ai-download", "下载字幕", { type: "button" }),
+      node("span", "bili-ai-source")
+    );
+    const tabs = node("div", "bili-ai-view-tabs", "", {
+      role: "tablist", "aria-label": "内容视图"
+    });
+    tabs.append(
+      node("button", "bili-ai-view-tab", "总结与章节", {
+        type: "button", id: "bili-ai-summary-tab", "data-view": "summary", role: "tab",
+        "aria-selected": "true", "aria-controls": "bili-ai-summary-pane"
+      }),
+      node("button", "bili-ai-view-tab", "同步字幕", {
+        type: "button", id: "bili-ai-transcript-tab", "data-view": "transcript", role: "tab",
+        "aria-selected": "false", "aria-controls": "bili-ai-transcript-pane", tabindex: "-1"
+      })
+    );
+    const viewContent = node("div", "bili-ai-view-content");
+    const summaryPane = node("div", "bili-ai-main-column", "", {
+      id: "bili-ai-summary-pane", role: "tabpanel", "aria-labelledby": "bili-ai-summary-tab"
+    });
+    summaryPane.append(node("h3", "", "视频总结"), node("div", "bili-ai-summary"),
+      node("h3", "", "主题章节"), node("ol", "bili-ai-chapters"));
+    const transcriptPane = node("section", "bili-ai-transcript-column", "", {
+      id: "bili-ai-transcript-pane", role: "tabpanel", "aria-labelledby": "bili-ai-transcript-tab"
+    });
+    transcriptPane.hidden = true;
+    const transcriptHeading = node("div", "bili-ai-transcript-heading");
+    const follow = node("button", "bili-ai-follow", "定位当前", { type: "button" });
+    follow.disabled = true;
+    transcriptHeading.append(node("h3", "", "同步字幕"), follow);
+    transcriptPane.append(transcriptHeading, node("div", "bili-ai-transcript-source"),
+      node("div", "bili-ai-transcript-notice", "打开面板后读取字幕…", { role: "status" }),
+      node("ol", "bili-ai-transcript-list", "", { "aria-label": "字幕列表" }));
+    viewContent.append(summaryPane, transcriptPane);
+    body.append(node("div", "bili-ai-video-title"),
+      node("div", "bili-ai-status", "正在读取页面…", { role: "status", "aria-live": "polite" }),
+      toolbar, tabs, viewContent);
+    panel.append(header, body);
+    root.append(badge, panel);
     document.body.append(root);
     state.root = root;
     state.panel = root.querySelector(".bili-ai-panel");
@@ -384,32 +529,70 @@
   }
 
   async function loadTranscript(route, page, runId) {
-    const playerUrl = `https://api.bilibili.com/x/player/v2?bvid=${encodeURIComponent(route.bvid)}&cid=${page.cid}`;
-    let player = await getBiliJson(playerUrl);
-    let track = core.pickSubtitleTrack(player?.data?.subtitle?.subtitles);
-    if (!track) {
-      try {
-        player = await getBiliJson(`https://api.bilibili.com/x/player/wbi/v2?bvid=${encodeURIComponent(route.bvid)}&cid=${page.cid}`);
-        track = core.pickSubtitleTrack(player?.data?.subtitle?.subtitles);
-      } catch { /* the older player endpoint is still usable */ }
-    }
     let subtitleIssue = "";
-    if (track) {
+    if (route.platform === "youtube") {
+      for (const track of page.captionTracks) {
+        const language = track.name?.simpleText || track.name?.runs?.map((part) => part.text).join("") ||
+          track.languageCode || "自动选择";
+        const source = `YouTube ${track.kind === "asr" ? "自动" : ""}字幕（${language}）`;
+        try {
+          setStatus(`正在读取${source}…`);
+          const response = await fetch(youtubeCaptionUrl(track.baseUrl, route.videoId), {
+            credentials: "include"
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const text = await response.text();
+          if (!text || text.length > 15_000_000) throw new Error("字幕内容为空或过大");
+          const segments = core.youtubeCaptionSegments(JSON.parse(text), page.duration);
+          if (!segments.length) throw new Error("没有可用的文字");
+          const coverage = core.transcriptCoverage(segments, page.duration);
+          if (coverage.complete) return { segments, source, coverage };
+          subtitleIssue = `${source}仅覆盖 ${core.formatTime(coverage.first)}–${core.formatTime(coverage.last)}，视频长 ${core.formatTime(page.duration)}；首句「${segments[0].content.slice(0, 50)}」`;
+        } catch (error) {
+          subtitleIssue = `${source}读取失败：${error.message || "未知错误"}`;
+        }
+      }
       try {
-        setStatus(`正在读取${track.lan_doc || ""}字幕…`);
-        const document = await getBiliJson(subtitleUrl(track.subtitle_url));
-        const segments = core.normalizeSegments(document, page.duration);
+        setStatus("正在读取 YouTube 转写文稿…");
+        const segments = await youtubePanelTranscript(route, page);
         if (segments.length) {
           const coverage = core.transcriptCoverage(segments, page.duration);
-          if (coverage.complete) {
-            return { segments, source: `B 站字幕（${track.lan_doc || track.lan || "自动选择"}）`, coverage };
-          }
-          subtitleIssue = `B 站字幕仅覆盖 ${core.formatTime(coverage.first)}–${core.formatTime(coverage.last)}，视频长 ${core.formatTime(page.duration)}；首句「${segments[0].content.slice(0, 50)}」`;
-        } else {
-          subtitleIssue = "B 站字幕没有可用的文字";
+          if (coverage.complete) return { segments, source: "YouTube 转写文稿", coverage };
+          subtitleIssue = `YouTube 转写文稿仅覆盖 ${core.formatTime(coverage.first)}–${core.formatTime(coverage.last)}，视频长 ${core.formatTime(page.duration)}`;
+        } else if (!subtitleIssue) {
+          subtitleIssue = "这个 YouTube 视频没有可读取的字幕";
         }
       } catch (error) {
-        subtitleIssue = `B 站字幕读取失败：${error.message || "未知错误"}`;
+        const issue = `YouTube 转写文稿读取失败：${error.message || "未知错误"}`;
+        subtitleIssue = subtitleIssue ? `${subtitleIssue}；${issue}` : issue;
+      }
+    } else {
+      const playerUrl = `https://api.bilibili.com/x/player/v2?bvid=${encodeURIComponent(route.bvid)}&cid=${page.cid}`;
+      let player = await getBiliJson(playerUrl);
+      let track = core.pickSubtitleTrack(player?.data?.subtitle?.subtitles);
+      if (!track) {
+        try {
+          player = await getBiliJson(`https://api.bilibili.com/x/player/wbi/v2?bvid=${encodeURIComponent(route.bvid)}&cid=${page.cid}`);
+          track = core.pickSubtitleTrack(player?.data?.subtitle?.subtitles);
+        } catch { /* the older player endpoint is still usable */ }
+      }
+      if (track) {
+        try {
+          setStatus(`正在读取${track.lan_doc || ""}字幕…`);
+          const document = await getBiliJson(subtitleUrl(track.subtitle_url));
+          const segments = core.normalizeSegments(document, page.duration);
+          if (segments.length) {
+            const coverage = core.transcriptCoverage(segments, page.duration);
+            if (coverage.complete) {
+              return { segments, source: `B 站字幕（${track.lan_doc || track.lan || "自动选择"}）`, coverage };
+            }
+            subtitleIssue = `B 站字幕仅覆盖 ${core.formatTime(coverage.first)}–${core.formatTime(coverage.last)}，视频长 ${core.formatTime(page.duration)}；首句「${segments[0].content.slice(0, 50)}」`;
+          } else {
+            subtitleIssue = "B 站字幕没有可用的文字";
+          }
+        } catch (error) {
+          subtitleIssue = `B 站字幕读取失败：${error.message || "未知错误"}`;
+        }
       }
     }
     if (!state.settings.localAsrEnabled) {
@@ -417,7 +600,9 @@
     }
     setStatus(`${subtitleIssue || "没有可读取的字幕"}，正在联系本地语音转写服务…`);
     try {
-      let job = await send({ type: "LOCAL_ASR", action: "start", bvid: route.bvid, page: page.page });
+      const video = route.platform === "youtube"
+        ? { youtubeId: route.videoId } : { bvid: route.bvid, page: page.page };
+      let job = await send({ type: "LOCAL_ASR", action: "start", ...video });
       const deadline = Date.now() + 3 * 60 * 60 * 1000;
       while (job?.status !== "done") {
         if (runId !== state.runId) throw new Error("分析已取消。");
@@ -437,7 +622,7 @@
         };
         setStatus(`正在语音转写：${stages[job.stage] || job.stage || "处理中"}${suffix}。`);
         await new Promise((resolve) => setTimeout(resolve, 2500));
-        job = await send({ type: "LOCAL_ASR", action: "poll", bvid: route.bvid, jobId: job.job_id });
+        job = await send({ type: "LOCAL_ASR", action: "poll", ...video, jobId: job.job_id });
       }
       const segments = core.normalizeSegments(job.segments, page.duration);
       if (!segments.length) throw new Error("本地语音转写没有返回有效内容。");
@@ -466,8 +651,7 @@
         let page = knownPage;
         if (!page) {
           setStatus("正在读取视频信息与字幕…");
-          const view = await getBiliJson(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(route.bvid)}`);
-          page = core.selectPage(view.data, route.page);
+          page = await getVideoPage(route);
         }
         if (!current()) throw new Error("字幕读取已取消。");
         state.title.textContent = page.page > 1 ? `${page.title} · P${page.page} ${page.part}` : page.title;
@@ -533,7 +717,8 @@
       const format = state.downloadFormat.value === "txt" ? "txt" : "srt";
       const segments = entry.transcript.segments;
       const content = format === "txt" ? core.segmentsToText(segments) : core.segmentsToSrt(segments);
-      const filename = core.subtitleFilename(entry.page.title, route.bvid, entry.page.page, format);
+      const filename = core.subtitleFilename(entry.page.title,
+        route.platform === "youtube" ? route.videoId : route.bvid, entry.page.page, format);
       saveSubtitle(content, filename);
       setStatus(`已下载 ${format.toUpperCase()} 字幕（${segments.length} 条，${entry.transcript.source}）。`, "ready");
     } catch (error) {
@@ -568,7 +753,7 @@
   async function makeSummary(segments, page, runId) {
     const chunks = core.chunkSegments(segments, 9000);
     if (!chunks.length) throw new Error("没有足够的文字来生成总结。");
-    const context = `视频标题：${page.title}\n当前分 P：${page.part}\n时长：${Math.round(page.duration)} 秒。`;
+    const context = `视频标题：${page.title}\n${page.part ? `当前分 P：${page.part}\n` : ""}时长：${Math.round(page.duration)} 秒。`;
     const totalSteps = chunks.length === 1 ? 1 : chunks.length + 1;
     const completedDurations = [];
     const elapsedText = (milliseconds) => {
@@ -679,8 +864,7 @@
         return;
       }
       setStatus("正在读取视频信息…");
-      const view = await getBiliJson(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(route.bvid)}`);
-      const page = core.selectPage(view.data, route.page);
+      const page = await getVideoPage(route);
       if (runId !== state.runId) return;
       const title = page.page > 1 ? `${page.title} · P${page.page} ${page.part}` : page.title;
       state.title.textContent = title;
@@ -727,7 +911,22 @@
 
   async function routeChanged() {
     const route = getRoute();
-    if (!route || route.signature === state.route) return;
+    if (!route) {
+      if (state.route) {
+        state.route = "";
+        state.runId++;
+        state.open = false;
+        state.panel.hidden = true;
+        state.badge.setAttribute("aria-expanded", "false");
+        state.transcriptPromise = null;
+        clearTranscript();
+        clearResult();
+      }
+      state.root.hidden = true;
+      return;
+    }
+    state.root.hidden = false;
+    if (route.signature === state.route) return;
     state.route = route.signature;
     state.runId++;
     state.analyze.disabled = false;

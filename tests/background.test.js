@@ -137,3 +137,25 @@ test("local ASR request uses only validated BVID and page", async () => {
     bvid: "../etc/passwd", page: 1 });
   assert.equal(invalid.ok, false);
 });
+
+test("YouTube ASR and summary cache accept only validated platform IDs", async () => {
+  let body;
+  const worker = createWorker(async (_url, init) => {
+    body = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ job_id: "job123", status: "queued" }) };
+  });
+  const started = await worker.send({ type: "LOCAL_ASR", action: "start",
+    youtubeId: "ABCDEFGHIJK" });
+  assert.equal(started.ok, true);
+  assert.equal(JSON.stringify(body), '{"youtubeId":"ABCDEFGHIJK"}');
+  const invalid = await worker.send({ type: "LOCAL_ASR", action: "start",
+    youtubeId: "../bad-id" });
+  assert.equal(invalid.ok, false);
+  const mixed = await worker.send({ type: "LOCAL_ASR", action: "start",
+    youtubeId: "ABCDEFGHIJK", bvid: "BV1dRYP6oEtB" });
+  assert.equal(mixed.ok, false);
+  const key = "yt:ABCDEFGHIJK:test-profile";
+  await worker.send({ type: "PUT_CACHE", key, value: { summary: "YouTube 总结" } });
+  assert.equal((await worker.send({ type: "GET_CACHE", key })).result.summary, "YouTube 总结");
+  assert.equal((await worker.send({ type: "GET_CACHE", key: "yt:../bad-id:test" })).result, null);
+});

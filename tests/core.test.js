@@ -28,6 +28,51 @@ test("subtitle parsing sorts rows and rejects invalid or out-of-range timestamps
   ]);
 });
 
+test("YouTube caption events preserve timings and track choice prefers Chinese and human captions", () => {
+  const tracks = [
+    { languageCode: "en", kind: "asr", baseUrl: "https://www.youtube.com/api/timedtext?x=1" },
+    { languageCode: "en", baseUrl: "https://www.youtube.com/api/timedtext?x=2" },
+    { languageCode: "zh-CN", kind: "asr", baseUrl: "https://www.youtube.com/api/timedtext?x=3" },
+    { languageCode: "zh-CN", baseUrl: "https://www.youtube.com/api/timedtext?x=4" }
+  ];
+  assert.deepEqual(core.pickYouTubeCaptionTracks(tracks).map((track) => track.baseUrl.slice(-1)),
+    ["4", "3", "2", "1"]);
+  const segments = core.youtubeCaptionSegments({ events: [
+    { tStartMs: 5200, dDurationMs: 1600, segs: [{ utf8: "第二" }, { utf8: " 句" }] },
+    { tStartMs: 100, dDurationMs: 950, segs: [{ utf8: "第一句" }] },
+    { tStartMs: 7000, dDurationMs: 1000 },
+    { tStartMs: 9000, dDurationMs: 1000, segs: [{ utf8: "越界" }] }
+  ] }, 8);
+  assert.deepEqual(segments.map(({ from, content }) => ({ from, content })), [
+    { from: 0.1, content: "第一句" }, { from: 5.2, content: "第二 句" }
+  ]);
+  assert.ok(Math.abs(segments[1].to - 6.8) < 1e-8);
+});
+
+test("YouTube player response extraction requires the current video ID", () => {
+  const script = 'var ytInitialPlayerResponse = {"videoDetails":{"videoId":"ABCDEFGHIJK",' +
+    '"title":"a } quoted value"},"captions":{"captionTracks":[]}};';
+  assert.equal(core.embeddedYouTubePlayerResponse(script, "ABCDEFGHIJK").videoDetails.title,
+    "a } quoted value");
+  assert.equal(core.embeddedYouTubePlayerResponse(script, "12345678901"), null);
+  assert.equal(core.embeddedYouTubePlayerResponse("ytInitialPlayerResponse = {bad};", "ABCDEFGHIJK"), null);
+});
+
+test("YouTube transcript panel fallback makes bounded cue durations", () => {
+  const panel = { content: { items: [
+    { transcriptSegmentViewModel: { timestamp: "0:01", simpleText: "开头" } },
+    { transcriptSegmentViewModel: { timestamp: "0:20", simpleText: "第二部分" } },
+    { transcriptSegmentViewModel: { timestamp: "0:20", simpleText: "第二部分" } },
+    { transcriptSegmentViewModel: { timestamp: "1:02", simpleText: "结尾" } },
+    { transcriptSegmentViewModel: { timestamp: "bad", simpleText: "无效" } }
+  ] } };
+  assert.deepEqual(core.youtubePanelSegments(panel, 70), [
+    { from: 1, to: 9, content: "开头" },
+    { from: 20, to: 28, content: "第二部分" },
+    { from: 62, to: 70, content: "结尾" }
+  ]);
+});
+
 test("subtitle export preserves millisecond SRT cues and readable TXT timestamps", () => {
   const segments = [
     { from: 0.125, to: 2.5, content: "第一行" },

@@ -53,7 +53,7 @@ async function saveSettings(event) {
         jsonMode: $("json-mode").checked
       }
     });
-    feedback("已保存。回到 B 站视频页，点击“AI 章节”查看结果。");
+    feedback("已保存。回到 B 站或 YouTube 视频页，点击“AI 章节”查看结果。");
     return true;
   } catch (error) {
     feedback(error.message || "保存失败。", true);
