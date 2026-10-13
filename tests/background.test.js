@@ -4,8 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-function createWorker(fetchImpl, initialSettings = {}) {
+function createWorker(fetchImpl, initialSettings = {}, actionStubs = {}) {
   let messageListener;
+  let actionListener;
+  const actionCalls = [];
   const storage = { aiSettings: {
     apiKey: "private-key",
     jsonMode: true,
@@ -18,18 +20,98 @@ function createWorker(fetchImpl, initialSettings = {}) {
       set: async (value) => Object.assign(storage, value)
     } },
     runtime: { onMessage: { addListener: (listener) => { messageListener = listener; } },
-      openOptionsPage: async () => {} },
-    action: { onClicked: { addListener: () => {} } },
-    tabs: { sendMessage: async () => {} }
+      openOptionsPage: async () => { actionCalls.push(["options"]); },
+      getURL: (resource) => `chrome-extension://test-extension/${resource}` },
+    action: { onClicked: { addListener: (listener) => { actionListener = listener; } } },
+    tabs: {
+      get: async (tabId) => {
+        actionCalls.push(["getTab", tabId]);
+        return { url: actionStubs.tabUrl || "" };
+      },
+      sendMessage: async (tabId, message) => {
+        actionCalls.push(["sendMessage", tabId, message]);
+        return actionStubs.sendMessage?.(tabId, message);
+      },
+      create: async (details) => {
+        actionCalls.push(["createTab", details]);
+        return actionStubs.createTab?.(details);
+      }
+    },
+    scripting: {
+      insertCSS: async (details) => {
+        actionCalls.push(["insertCSS", details]);
+        return actionStubs.insertCSS?.(details);
+      },
+      executeScript: async (details) => {
+        actionCalls.push(["executeScript", details]);
+        return actionStubs.executeScript?.(details);
+      }
+    }
   };
   const source = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
   vm.runInNewContext(source, { chrome, fetch: fetchImpl, URL, AbortController,
     setTimeout, clearTimeout, console, Math, Date, Promise }, { filename: "background.js" });
   return {
     storage,
-    send: (message) => new Promise((resolve) => messageListener(message, {}, resolve))
+    send: (message) => new Promise((resolve) => messageListener(message, {}, resolve)),
+    clickAction: (tab) => actionListener(tab),
+    actionCalls
   };
 }
+
+test("action on a YouTube watch page opens the in-page panel", async () => {
+  const worker = createWorker(async () => { throw new Error("unexpected fetch"); });
+  await worker.clickAction({ id: 42, url: "https://www.youtube.com/watch?v=ABCDEFGHIJK&t=12" });
+  assert.deepEqual(worker.actionCalls.map(([name]) => name), ["sendMessage"]);
+  assert.equal(worker.actionCalls[0][1], 42);
+  assert.equal(worker.actionCalls[0][2].type, "TOGGLE_PANEL");
+});
+
+test("action can read the clicked video tab URL when it is absent from the click event", async () => {
+  const worker = createWorker(async () => { throw new Error("unexpected fetch"); }, {}, {
+    tabUrl: "https://www.youtube.com/watch?v=ABCDEFGHIJK"
+  });
+  await worker.clickAction({ id: 42 });
+  assert.deepEqual(worker.actionCalls.map(([name]) => name), ["getTab", "sendMessage"]);
+});
+
+test("action injects the content script and retries if a watch page has no receiver yet", async () => {
+  let attempts = 0;
+  const worker = createWorker(async () => { throw new Error("unexpected fetch"); }, {}, {
+    sendMessage: async () => {
+      if (++attempts === 1) throw new Error("Could not establish connection. Receiving end does not exist.");
+    }
+  });
+  await worker.clickAction({ id: 42, url: "https://www.youtube.com/watch?v=ABCDEFGHIJK" });
+  const calls = worker.actionCalls;
+  assert.equal(calls.filter(([name]) => name === "sendMessage").length, 2);
+  assert.equal(calls.some(([name]) => name === "insertCSS"), true);
+  assert.equal(calls.some(([name]) => name === "executeScript"), true);
+  const injected = calls.filter(([name]) => name === "executeScript")
+    .flatMap(([, details]) => details.files || []);
+  assert.equal(injected.includes("lib/core.js"), true);
+  assert.equal(injected.includes("content.js"), true);
+  assert.equal(calls.some(([name]) => name === "createTab" || name === "options"), false);
+});
+
+test("action on the YouTube homepage asks the page to show its video hint", async () => {
+  const worker = createWorker(async () => { throw new Error("unexpected fetch"); });
+  await worker.clickAction({ id: 42, url: "https://www.youtube.com/" });
+  assert.deepEqual(worker.actionCalls.map(([name]) => name), ["sendMessage"]);
+  assert.equal(worker.actionCalls[0][2].type, "TOGGLE_PANEL");
+});
+
+test("action opens extension help if the YouTube content script cannot be injected", async () => {
+  const worker = createWorker(async () => { throw new Error("unexpected fetch"); }, {}, {
+    sendMessage: async () => { throw new Error("No receiver"); },
+    executeScript: async () => { throw new Error("The extensions gallery cannot be scripted"); }
+  });
+  await worker.clickAction({ id: 42, url: "https://www.youtube.com/watch?v=ABCDEFGHIJK" });
+  const created = worker.actionCalls.filter(([name]) => name === "createTab");
+  assert.equal(created.length, 1);
+  assert.equal(created[0][1].url, "chrome-extension://test-extension/help.html");
+  assert.equal(worker.actionCalls.some(([name]) => name === "options"), false);
+});
 
 test("content script gets non-secret settings and model calls carry the key only in worker fetch", async () => {
   let request;

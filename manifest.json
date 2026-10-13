@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "AI 视频章节：B站与 YouTube",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "为 B 站和 YouTube 视频生成总结与章节，同步高亮字幕并支持字幕下载。",
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting", "activeTab"],
   "host_permissions": [
     "https://www.bilibili.com/*",
     "https://api.bilibili.com/*",

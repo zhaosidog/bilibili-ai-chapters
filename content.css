@@ -47,6 +47,11 @@
 
 #bili-ai-chapters-root .bili-ai-panel[hidden] { display: none; }
 
+#bili-ai-chapters-root.bili-ai-site-hint .bili-ai-panel { height: auto; }
+#bili-ai-chapters-root.bili-ai-site-hint .bili-ai-toolbar,
+#bili-ai-chapters-root.bili-ai-site-hint .bili-ai-view-tabs,
+#bili-ai-chapters-root.bili-ai-site-hint .bili-ai-view-content { display: none; }
+
 #bili-ai-chapters-root .bili-ai-header {
   display: flex;
   align-items: center;

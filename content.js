@@ -37,7 +37,8 @@
     activeTranscriptIndex: -1,
     lastScrolledIndex: -1,
     followPausedUntil: 0,
-    needsReload: false
+    needsReload: false,
+    siteHint: false
   };
 
   function getRoute() {
@@ -229,6 +230,16 @@
     state.open = open;
     state.panel.hidden = !open;
     state.badge.setAttribute("aria-expanded", String(open));
+    if (!getRoute() && location.hostname === "www.youtube.com") {
+      state.siteHint = open;
+      state.root.hidden = !open;
+      state.root.classList.toggle("bili-ai-site-hint", open);
+      if (open) {
+        state.title.textContent = "请先打开一个 YouTube 视频";
+        setStatus("当前页面没有可分析的视频。请打开普通视频播放页（地址含 /watch?v=），再点击扩展图标。", "normal");
+      }
+      return;
+    }
     if (!open) return;
     updateActiveSubtitle(true);
     const route = getRoute();
@@ -913,18 +924,21 @@
     const route = getRoute();
     if (!route) {
       if (state.route) {
+        const keepHint = state.siteHint;
         state.route = "";
         state.runId++;
-        state.open = false;
-        state.panel.hidden = true;
-        state.badge.setAttribute("aria-expanded", "false");
+        state.open = keepHint;
+        state.panel.hidden = !keepHint;
+        state.badge.setAttribute("aria-expanded", String(keepHint));
         state.transcriptPromise = null;
         clearTranscript();
         clearResult();
       }
-      state.root.hidden = true;
+      state.root.hidden = !state.siteHint;
       return;
     }
+    state.siteHint = false;
+    state.root.classList.remove("bili-ai-site-hint");
     state.root.hidden = false;
     if (route.signature === state.route) return;
     state.route = route.signature;
@@ -950,13 +964,21 @@
     }
   }
 
-  if (document.body) {
+  let queuedToggle = false;
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== "TOGGLE_PANEL") return;
+    if (!state.root) queuedToggle = !queuedToggle;
+    else openPanel(!state.open);
+  });
+
+  function boot() {
     createUI();
     routeChanged();
     setInterval(routeChanged, 1000);
     setInterval(updateActiveSubtitle, 250);
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message?.type === "TOGGLE_PANEL") openPanel(!state.open);
-    });
+    if (queuedToggle) openPanel(!state.open);
   }
+
+  if (document.body) boot();
+  else document.addEventListener("DOMContentLoaded", boot, { once: true });
 })();

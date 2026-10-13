@@ -65,7 +65,7 @@ def runtime_script(cached=None):
       window.__modelPrompts = [];
       window.chrome = {runtime: {
         lastError: null,
-        onMessage: {addListener: () => {}},
+        onMessage: {addListener: (listener) => { window.__extensionMessageListener = listener; }},
         sendMessage(message, callback) {
           if (message.type === 'GET_SETTINGS') return callback({ok: true, result: {
             configured: true, autoAnalyze: true, localAsrEnabled: false,
@@ -202,6 +202,12 @@ def run():
         page.evaluate("history.pushState(null, '', '/')")
         page.wait_for_function("document.querySelector('#bili-ai-chapters-root').hidden")
         assert not page.locator(".bili-ai-badge").is_visible()
+        assert not page.locator(".bili-ai-panel").is_visible()
+        page.evaluate("window.__extensionMessageListener({type: 'TOGGLE_PANEL'})")
+        page.locator(".bili-ai-panel:visible").wait_for(timeout=10000)
+        assert "请先打开一个 YouTube 视频" in page.locator(".bili-ai-video-title").inner_text()
+        assert not page.locator(".bili-ai-toolbar").is_visible()
+        page.locator(".bili-ai-close").click()
         assert not page.locator(".bili-ai-panel").is_visible()
         page.evaluate(f"history.pushState(null, '', '/watch?v={FIRST_ID}')")
         page.wait_for_function("!document.querySelector('#bili-ai-chapters-root').hidden")

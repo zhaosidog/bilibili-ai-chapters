@@ -7,7 +7,7 @@
 1. 打开 Chrome 的 `chrome://extensions` 或 Edge 的 `edge://extensions`。
 2. 如果使用压缩包，先解压。打开“开发者模式”，选择“加载已解压的扩展程序”，选中包含 `manifest.json` 的目录。
 3. 打开扩展设置，选择智谱 GLM、阿里云百炼千问、DeepSeek 或其他兼容 Chat Completions 的服务，填写对应平台的 API Key 并保存。
-4. 打开普通 B 站视频（`https://www.bilibili.com/video/BV...`）或 YouTube 视频（`https://www.youtube.com/watch?v=...`），点击右侧“AI 章节”。默认会自动分析，也可在设置中关闭自动分析。
+4. 打开普通 B 站视频（`https://www.bilibili.com/video/BV...`）或 YouTube 视频（`https://www.youtube.com/watch?v=...`），点击右侧“AI 章节”或浏览器工具栏中的扩展图标。默认会自动分析，也可在设置中关闭自动分析。在 YouTube 首页点击扩展图标时会提示先打开视频。
 
 ## 同步字幕
 
@@ -33,7 +33,7 @@ DeepSeek 预设仍使用 `deepseek-flash`。模型名称、请求地址和 JSON 
 
 支持 B 站普通字幕与 AI 字幕，以及 YouTube 普通字幕与自动字幕。YouTube 字幕读取依赖其网页播放器使用的接口，该接口可能变化；遇到空字幕时扩展会尝试其他可用字幕轨道，再按设置尝试本地转写。更新扩展文件后，请在浏览器的扩展管理页点击本扩展的“重新加载”，再刷新视频页。
 
-如果安装的是此前解压的副本，GitHub 源码更新不会自动替换那份文件。请先用新版文件覆盖 Chrome 加载的目录，再点“重新加载”，并确认扩展卡片显示版本 `0.2.0`。从源码生成安装包可运行 `python scripts/package_extension.py`，输出到 `dist/bilibili-ai-chapters.zip`。
+如果安装的是此前解压的副本，GitHub 源码更新不会自动替换那份文件。请先用新版文件覆盖 Chrome 加载的目录，再点“重新加载”，并确认扩展卡片显示版本 `0.2.1`。从源码生成安装包可运行 `python scripts/package_extension.py`，输出到 `dist/bilibili-ai-chapters.zip`。
 
 如果扩展在本地转写过程中被更新或重新加载，旧视频页会失去扩展连接。面板会提供“刷新页面继续”按钮；helper 内正在运行的转写会继续，刷新后插件会接续同一任务或读取已完成的缓存。
 

@@ -221,13 +221,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+async function toggleVideoPanel(tabId) {
+  const message = { type: "TOGGLE_PANEL" };
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+    return true;
+  } catch { /* an existing tab may not have the current content script */ }
+  try {
+    const target = { tabId };
+    await chrome.scripting.insertCSS({ target, files: ["content.css"] });
+    await chrome.scripting.executeScript({ target, files: ["lib/core.js", "content.js"] });
+    await chrome.tabs.sendMessage(tabId, message);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
-  const url = new URL(tab.url || "about:blank");
+  let url;
+  try {
+    const address = tab.url || (tab.id != null ? (await chrome.tabs.get(tab.id)).url : "");
+    url = new URL(address || "about:blank");
+  } catch {
+    url = new URL("about:blank");
+  }
+  const youtubeSite = url.hostname === "www.youtube.com";
   const biliVideo = url.hostname === "www.bilibili.com" && /^\/video\/BV[0-9A-Za-z]{10}/.test(url.pathname);
-  const youtubeVideo = url.hostname === "www.youtube.com" && url.pathname === "/watch" &&
-    /^[A-Za-z0-9_-]{11}$/.test(url.searchParams.get("v") || "");
-  if (tab.id && (biliVideo || youtubeVideo)) {
-    try { await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_PANEL" }); return; } catch { /* page still loading */ }
+  if (tab.id != null && (youtubeSite || biliVideo)) {
+    if (await toggleVideoPanel(tab.id)) return;
+    await chrome.tabs.create({ url: chrome.runtime.getURL("help.html") });
+    return;
+  }
+  if (["youtube.com", "m.youtube.com", "youtu.be"].includes(url.hostname)) {
+    await chrome.tabs.create({ url: chrome.runtime.getURL("help.html") });
+    return;
   }
   await chrome.runtime.openOptionsPage();
 });

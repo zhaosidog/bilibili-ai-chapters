@@ -12,6 +12,7 @@ FILES = (
     "content.js",
     "content.css",
     "options.html",
+    "help.html",
     "options.css",
     "options.js",
     "lib/core.js",
