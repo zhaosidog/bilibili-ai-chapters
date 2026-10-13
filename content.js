@@ -614,7 +614,7 @@
       const video = route.platform === "youtube"
         ? { youtubeId: route.videoId } : { bvid: route.bvid, page: page.page };
       let job = await send({ type: "LOCAL_ASR", action: "start", ...video });
-      const deadline = Date.now() + 3 * 60 * 60 * 1000;
+      const deadline = Date.now() + 12 * 60 * 60 * 1000;
       while (job?.status !== "done") {
         if (runId !== state.runId) throw new Error("分析已取消。");
         if (["error", "failed"].includes(job?.status)) {

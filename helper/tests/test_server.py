@@ -82,6 +82,20 @@ class ValidationTests(unittest.TestCase):
             metadata.assert_called_once_with(canonical)
             download.assert_not_called()
 
+    def test_long_interview_fits_bounded_transcription_limit(self):
+        def result(duration):
+            return server.subprocess.CompletedProcess(
+                args=[], returncode=0,
+                stdout=json.dumps({"id": "0Z-vhBvBmUY", "duration": duration}).encode(),
+                stderr=b"",
+            )
+
+        with patch.object(server.subprocess, "run", return_value=result(15749)):
+            self.assertEqual(server._run_metadata("https://www.youtube.com/watch?v=0Z-vhBvBmUY")["duration"], 15749)
+        with patch.object(server.subprocess, "run", return_value=result(21601)):
+            with self.assertRaisesRegex(server.ClientError, "exceeds 360 minutes"):
+                server._run_metadata("https://www.youtube.com/watch?v=0Z-vhBvBmUY")
+
     def test_origin_policy(self):
         self.assertTrue(server.allowed_origin(None))
         self.assertTrue(server.allowed_origin("chrome-extension://" + "a" * 32))
@@ -161,6 +175,12 @@ class HttpTests(unittest.TestCase):
         status, cached = self._request("/transcribe", request)
         self.assertEqual(status, 200)
         self.assertEqual(cached["segments"], job["segments"])
+
+    def test_health_lists_supported_platforms(self):
+        status, health = self._request("/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(health["protocolVersion"], 2)
+        self.assertIn("youtube", health["platforms"])
 
     def test_youtube_http_rejects_mixed_ids(self):
         with self.assertRaises(urllib.error.HTTPError) as error:

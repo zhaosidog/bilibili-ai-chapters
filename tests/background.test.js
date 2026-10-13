@@ -222,7 +222,10 @@ test("local ASR request uses only validated BVID and page", async () => {
 
 test("YouTube ASR and summary cache accept only validated platform IDs", async () => {
   let body;
-  const worker = createWorker(async (_url, init) => {
+  const worker = createWorker(async (url, init) => {
+    if (url.endsWith("/health")) return { ok: true, json: async () => ({
+      status: "ok", protocolVersion: 2, platforms: ["bilibili", "youtube"]
+    }) };
     body = JSON.parse(init.body);
     return { ok: true, json: async () => ({ job_id: "job123", status: "queued" }) };
   });
@@ -240,4 +243,18 @@ test("YouTube ASR and summary cache accept only validated platform IDs", async (
   await worker.send({ type: "PUT_CACHE", key, value: { summary: "YouTube 总结" } });
   assert.equal((await worker.send({ type: "GET_CACHE", key })).result.summary, "YouTube 总结");
   assert.equal((await worker.send({ type: "GET_CACHE", key: "yt:../bad-id:test" })).result, null);
+});
+
+test("YouTube ASR explains when the running helper is too old", async () => {
+  const urls = [];
+  const worker = createWorker(async (url) => {
+    urls.push(url);
+    return { ok: true, json: async () => ({ status: "ok", source: "local-asr" }) };
+  });
+  const response = await worker.send({ type: "LOCAL_ASR", action: "start",
+    youtubeId: "ABCDEFGHIJK" });
+  assert.equal(response.ok, false);
+  assert.match(response.error, /helper 是旧版本/);
+  assert.equal(urls.length, 1);
+  assert.ok(urls[0].endsWith("/health"));
 });

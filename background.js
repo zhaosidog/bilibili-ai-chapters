@@ -171,9 +171,22 @@ async function localAsr(message) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
+    if (youtubeId && message.action === "start") {
+      const healthResponse = await fetch(base + "/health", { signal: controller.signal });
+      const health = await healthResponse.json();
+      if (!healthResponse.ok || !Array.isArray(health?.platforms) ||
+          !health.platforms.includes("youtube")) {
+        throw new Error("本地语音转写 helper 是旧版本。请关闭旧服务，用新版 helper/start.ps1 重启后再试。");
+      }
+    }
     const response = await fetch(base + path, { ...init, signal: controller.signal });
     const data = await response.json();
-    if (!response.ok) throw new Error(String(data?.error || "本地转写服务出错。").slice(0, 300));
+    if (!response.ok) {
+      if (youtubeId && response.status === 400 && data?.error === "unknown request field") {
+        throw new Error("本地语音转写 helper 是旧版本。请关闭旧服务，用新版 helper/start.ps1 重启后再试。");
+      }
+      throw new Error(String(data?.error || "本地转写服务出错。").slice(0, 300));
+    }
     return data;
   } catch (error) {
     if (error.name === "AbortError") throw new Error("本地转写服务响应超时。");

@@ -37,9 +37,9 @@ PORT = 8765
 MAX_REQUEST_BYTES = 4096
 MAX_METADATA_BYTES = 2 * 1024 * 1024
 MAX_CACHE_BYTES = 20 * 1024 * 1024
-MAX_DURATION_SECONDS = 2 * 60 * 60
-MAX_TEMP_BYTES = 300 * 1024 * 1024
-DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
+MAX_DURATION_SECONDS = 6 * 60 * 60
+MAX_TEMP_BYTES = 750 * 1024 * 1024
+DOWNLOAD_TIMEOUT_SECONDS = 20 * 60
 MODEL = os.environ.get("BILI_ASR_MODEL", "small")
 _language_setting = os.environ.get("BILI_ASR_LANGUAGE", "auto")
 LANGUAGE = None if _language_setting in {"", "auto"} else _language_setting
@@ -270,7 +270,7 @@ def _download_audio(url: str, folder: Path, update: Callable[[int, str], None]) 
     command = [
         sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist", "--no-warnings", "--no-colors",
         "--no-progress", "--socket-timeout", "15", "--retries", "2", "--fragment-retries", "2",
-        "--max-filesize", "300M", "-f", "bestaudio/best", "--extract-audio",
+        "--max-filesize", "500M", "-f", "bestaudio/best", "--extract-audio",
         "--audio-format", "mp3", "--audio-quality", "5", "-o", "audio.%(ext)s", url,
     ]
     error_log = folder / "yt-dlp-error.log"
@@ -286,7 +286,7 @@ def _download_audio(url: str, folder: Path, update: Callable[[int, str], None]) 
                 if time.monotonic() - started > DOWNLOAD_TIMEOUT_SECONDS:
                     raise ClientError("audio download timed out")
                 if _temp_bytes(folder) > MAX_TEMP_BYTES:
-                    raise ClientError("audio download exceeded 300 MiB temporary storage limit")
+                    raise ClientError("audio download exceeded 750 MiB temporary storage limit")
                 time.sleep(0.5)
         except BaseException:
             _kill_process_tree(process)
@@ -298,7 +298,7 @@ def _download_audio(url: str, folder: Path, update: Callable[[int, str], None]) 
     if not audio.is_file() or audio.stat().st_size == 0:
         raise ClientError("yt-dlp did not create an MP3 audio file")
     if _temp_bytes(folder) > MAX_TEMP_BYTES:
-        raise ClientError("audio download exceeded 300 MiB temporary storage limit")
+        raise ClientError("audio download exceeded 750 MiB temporary storage limit")
     update(25, "transcribing")
     return audio
 
@@ -493,7 +493,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._permitted():
             return
         if self.path == "/health":
-            self._json(HTTPStatus.OK, {"status": "ok", "source": "local-asr"})
+            self._json(HTTPStatus.OK, {"status": "ok", "source": "local-asr",
+                                       "protocolVersion": 2, "platforms": ["bilibili", "youtube"]})
             return
         match = JOB_RE.fullmatch(self.path)
         if match:
