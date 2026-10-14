@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 FIRST_ID = "AbCdEfGhI12"
 NEXT_ID = "ZyXwVuTsR98"
-API_KEY = "AIzaSyYoutubeSmokeKey1234567890"
+API_KEY = "SmokeYoutubeKey_12345678901234567890"
 
 
 def player_response(video_id, title, with_captions=True, caption_base_url=None):
@@ -174,9 +174,19 @@ def run():
         assert "第一章主题内容" in page.evaluate("window.__modelPrompts[0]")
         assert not page.locator(".bili-ai-transcript-column").is_visible()
 
+        # A host page script can see the panel DOM but must not trigger paid or local work.
+        page.evaluate("""() => {
+          document.querySelector('.bili-ai-analyze').click();
+          document.querySelector('.bili-ai-video-download').click();
+          document.querySelector('.bili-ai-download').click();
+        }""")
+        assert page.evaluate("window.__modelCalls") == 1
+        assert page.evaluate("window.__videoDownloadRequests") == []
+
         page.locator(".bili-ai-video-download").click()
         page.locator(".bili-ai-video-download-status:has-text('youtube_AbCdEfGhI12.mp4')").wait_for(
             timeout=10000)
+        assert "C:/Users/Tester" not in page.locator(".bili-ai-video-download-status").inner_text()
         requests = page.evaluate("window.__videoDownloadRequests")
         assert requests[0]["action"] == "start"
         assert requests[0]["route"]["videoId"] == FIRST_ID

@@ -393,12 +393,17 @@
     root.querySelector(".bili-ai-settings").addEventListener("click", () => {
       send({ type: "OPEN_OPTIONS" }).catch((error) => setStatus(error.message, "error"));
     });
-    state.analyze.addEventListener("click", () => {
+    state.analyze.addEventListener("click", (event) => {
+      if (!event.isTrusted) return;
       if (state.needsReload) window.location.reload();
       else runAnalysis(true);
     });
-    state.download.addEventListener("click", downloadSubtitle);
-    state.videoDownload.addEventListener("click", startVideoDownload);
+    state.download.addEventListener("click", (event) => {
+      if (event.isTrusted) downloadSubtitle();
+    });
+    state.videoDownload.addEventListener("click", (event) => {
+      if (event.isTrusted) startVideoDownload();
+    });
     state.transcriptList.addEventListener("click", (event) => {
       const button = event.target.closest("button[data-index]");
       if (!button || !state.transcript || getRoute()?.signature !== state.transcript.signature) return;
@@ -768,7 +773,8 @@
     notice.hidden = false;
     notice.dataset.kind = ["error", "interrupted"].includes(entry.status) ? "error" : entry.status === "done" ? "ready" : "normal";
     if (entry.status === "done") {
-      notice.textContent = `视频已保存：${entry.path || "下载文件夹"}`;
+      const filename = String(entry.path || "").split(/[\\/]/).pop();
+      notice.textContent = `视频已保存到“下载/AI视频章节”：${filename || "请查看下载文件夹"}`;
     } else if (entry.status === "interrupted") {
       notice.textContent = `进度连接中断：${entry.error || "请点击“重试下载”重新连接任务。"} 下载任务可能仍在本地运行。`;
     } else if (entry.status === "error") {

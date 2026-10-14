@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI 视频章节：B站与 YouTube",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "为 B 站和 YouTube 视频生成总结与章节，同步高亮字幕，并支持字幕和视频下载。",
   "permissions": ["storage", "scripting", "activeTab"],
   "host_permissions": [
