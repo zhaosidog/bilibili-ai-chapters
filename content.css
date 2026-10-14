@@ -49,6 +49,7 @@
 
 #bili-ai-chapters-root.bili-ai-site-hint .bili-ai-panel { height: auto; }
 #bili-ai-chapters-root.bili-ai-site-hint .bili-ai-toolbar,
+#bili-ai-chapters-root.bili-ai-site-hint .bili-ai-video-download-status,
 #bili-ai-chapters-root.bili-ai-site-hint .bili-ai-view-tabs,
 #bili-ai-chapters-root.bili-ai-site-hint .bili-ai-view-content { display: none; }
 
@@ -126,7 +127,8 @@
 }
 
 #bili-ai-chapters-root .bili-ai-analyze,
-#bili-ai-chapters-root .bili-ai-download {
+#bili-ai-chapters-root .bili-ai-download,
+#bili-ai-chapters-root .bili-ai-video-download {
   border: 0;
   border-radius: 8px;
   padding: 9px 12px;
@@ -137,7 +139,8 @@
   white-space: nowrap;
 }
 
-#bili-ai-chapters-root .bili-ai-download { background: #e8f6fb; color: #007fa8; }
+#bili-ai-chapters-root .bili-ai-download,
+#bili-ai-chapters-root .bili-ai-video-download { background: #e8f6fb; color: #007fa8; }
 #bili-ai-chapters-root .bili-ai-download-format {
   border: 1px solid #d2e3ec;
   border-radius: 8px;
@@ -148,8 +151,25 @@
   cursor: pointer;
 }
 #bili-ai-chapters-root .bili-ai-analyze:disabled,
-#bili-ai-chapters-root .bili-ai-download:disabled { opacity: .55; cursor: wait; }
+#bili-ai-chapters-root .bili-ai-download:disabled,
+#bili-ai-chapters-root .bili-ai-video-download:disabled { opacity: .55; cursor: wait; }
 #bili-ai-chapters-root .bili-ai-source { flex-basis: 100%; color: #8092a0; font-size: 11px; }
+#bili-ai-chapters-root .bili-ai-video-download-status {
+  flex: 0 0 auto;
+  border-radius: 8px;
+  margin: -6px 0 6px;
+  padding: 8px 10px;
+  color: #36536c;
+  background: #edf5fa;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  max-height: 44px;
+  overflow-y: auto;
+  user-select: text;
+}
+#bili-ai-chapters-root .bili-ai-video-download-status[hidden] { display: none; }
+#bili-ai-chapters-root .bili-ai-video-download-status[data-kind="error"] { color: #a8372e; background: #fff0ee; }
+#bili-ai-chapters-root .bili-ai-video-download-status[data-kind="ready"] { color: #1a705b; background: #ecf8f3; }
 #bili-ai-chapters-root h3 { margin: 15px 0 8px; font-size: 14px; }
 #bili-ai-chapters-root .bili-ai-summary { color: #34495a; white-space: pre-wrap; }
 
@@ -313,6 +333,8 @@
 #bili-ai-chapters-root .bili-ai-chapters p { margin: 0 5px 8px 51px; color: #697c8c; font-size: 12px; }
 
 @media (max-width: 760px) {
-  #bili-ai-chapters-root .bili-ai-panel { top: 10px; right: 10px; height: 88vh; }
+  #bili-ai-chapters-root .bili-ai-panel { top: 10px; right: 10px; height: min(96vh, calc(100vh - 20px)); }
   #bili-ai-chapters-root .bili-ai-badge { right: 10px; }
+  #bili-ai-chapters-root .bili-ai-toolbar { gap: 6px; margin: 8px 0; }
+  #bili-ai-chapters-root .bili-ai-video-download-status { max-height: 32px; padding: 4px 8px; margin: 0 0 4px; }
 }

@@ -1,6 +1,6 @@
 # AI 视频章节：B站与 YouTube
 
-一个 Chrome / Edge Manifest V3 浏览器扩展：在普通 B 站和 YouTube 视频页生成中文总结与可点击的主题章节。打开面板还能查看随播放高亮的字幕，点击章节或字幕都会跳到对应位置，也可以下载带时间轴的字幕。
+一个 Chrome / Edge Manifest V3 浏览器扩展：在普通 B 站和 YouTube 视频页生成中文总结与可点击的主题章节。打开面板还能查看随播放高亮的字幕，点击章节或字幕都会跳到对应位置，也可以下载带时间轴的字幕和视频。
 
 ## 安装扩展
 
@@ -21,6 +21,12 @@
 
 下载复用当前视频已经读取的字幕或本地语音转写。即使总结来自缓存，也可以单独下载字幕；下载不调用 AI 模型，也不要求先填写模型 API Key。若字幕明显只覆盖视频开头，扩展会尝试已启用的本地语音转写；没有取得足够字幕时会显示原因，不会把明显不完整的片段当作全片字幕下载。本地语音转写需要先启动 helper。
 
+## 下载视频
+
+先按 [`helper/README.md`](helper/README.md) 启动本地服务。在 B 站或 YouTube 普通视频页打开“AI 章节”，点击“下载视频”。面板会显示任务进度，完成后显示保存的完整路径。视频保存为 MP4，默认位于用户的 `下载/AI视频章节` 文件夹，文件名包含平台视频 ID；B 站分 P 视频还包含 P 序号。
+
+视频下载由本机的 `yt-dlp` 和 `ffmpeg` 完成，不需要字幕或模型 API Key。关闭面板后任务仍在 helper 中运行；刷新视频页后再次点击“下载视频”可接续同一任务或查看已经下载的文件。相同视频不会重复覆盖已有文件。只支持当前可访问的普通视频；需要额外登录、地区权限、付费或受保护的视频可能无法下载。
+
 ## 模型配置
 
 新安装默认选择国内智谱免费模型 [`glm-4.7-flash`](https://docs.bigmodel.cn/cn/guide/models/free/glm-4.7-flash)，需自行申请 API Key。千问预设使用阿里云百炼北京地域的 [`qwen3.5-35b-a3b`](https://help.aliyun.com/zh/model-studio/qwen3-5-35b-a3b) 和兼容地址 `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`。阿里云[推荐业务空间专属域名](https://help.aliyun.com/zh/model-studio/beijing-access-information)；可在设置中将请求地址改为 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions`，用百炼控制台显示的实际 WorkspaceId 替换占位符。北京地域的 API Key 与其他地域不能混用。千问为计费模型，价格以百炼控制台为准。
@@ -33,9 +39,9 @@ DeepSeek 预设仍使用 `deepseek-flash`。模型名称、请求地址和 JSON 
 
 支持 B 站普通字幕与 AI 字幕，以及 YouTube 普通字幕与自动字幕。YouTube 字幕读取依赖其网页播放器使用的接口，该接口可能变化；遇到空字幕时扩展会尝试其他可用字幕轨道，再按设置尝试本地转写。更新扩展文件后，请在浏览器的扩展管理页点击本扩展的“重新加载”，再刷新视频页。
 
-如果安装的是此前解压的副本，GitHub 源码更新不会自动替换那份文件。请先用新版文件覆盖 Chrome 加载的目录，再点“重新加载”，并确认扩展卡片显示版本 `0.2.2`。从源码生成安装包可运行 `python scripts/package_extension.py`，输出到 `dist/bilibili-ai-chapters.zip`。
+如果安装的是此前解压的副本，GitHub 源码更新不会自动替换那份文件。请先用新版文件覆盖 Chrome 加载的目录，再点“重新加载”，并确认扩展卡片显示版本 `0.3.0`。新版会请求访问本机 `127.0.0.1`，用于转写和视频下载。从源码生成安装包可运行 `python scripts/package_extension.py`，输出到 `dist/bilibili-ai-chapters.zip`。
 
-扩展更新后，如果要为无字幕的 YouTube 视频使用本地转写，也要重启本机正在运行的 helper。旧进程不会自动载入新版 `server.py`，可通过 `http://127.0.0.1:8765/health` 返回的 `platforms` 检查是否支持 `youtube`。本地转写允许最长 6 小时视频；长视频在 CPU 上可能需要数小时。
+扩展更新后，要使用本地转写或视频下载，也要重启本机正在运行的 helper。旧进程不会自动载入新版 `server.py`，可通过 `http://127.0.0.1:8765/health` 返回的 `features.videoDownload` 检查是否支持视频下载。本地转写允许最长 6 小时视频；长视频在 CPU 上可能需要数小时。
 
 如果扩展在本地转写过程中被更新或重新加载，旧视频页会失去扩展连接。面板会提供“刷新页面继续”按钮；helper 内正在运行的转写会继续，刷新后插件会接续同一任务或读取已完成的缓存。
 
@@ -50,6 +56,7 @@ DeepSeek 预设仍使用 `deepseek-flash`。模型名称、请求地址和 JSON 
 - 字幕或转写文本会发送到你设置的模型 API；API Key 保存在本机的 `chrome.storage.local`，浏览器扩展存储不加密。扩展阻止内容脚本读取该存储，模型请求只在扩展后台发送。
 - 成功的总结按视频分 P 与模型配置缓存。点“生成总结与章节”会重新分析。
 - B 站和 YouTube 的字幕及视频信息来自各自网页使用的接口，网站改版后可能需要更新扩展。
+- 视频文件只保存在本机下载文件夹，不会发给模型 API；字幕或转写文本仍按上述设置发送给模型。
 - 当前支持 B 站普通 `/video/BV...` 与 YouTube 普通 `/watch?v=...` 视频页；番剧、Shorts、直播和嵌入播放器暂不在此版本范围内。
 
 ## 开发验证

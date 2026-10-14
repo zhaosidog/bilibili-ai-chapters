@@ -199,6 +199,54 @@ async function localAsr(message) {
   }
 }
 
+async function videoDownload(message) {
+  const base = "http://127.0.0.1:8765";
+  let path;
+  let init;
+  if (message.action === "start") {
+    const route = message.route;
+    let payload;
+    if (route?.platform === "youtube" && /^[A-Za-z0-9_-]{11}$/.test(route.videoId || "")) {
+      payload = { youtubeId: route.videoId };
+    } else if (route?.platform === "bilibili" && /^BV[0-9A-Za-z]{10}$/.test(route.bvid || "") &&
+        Number.isInteger(route.page) && route.page >= 1 && route.page <= 1000) {
+      payload = { bvid: route.bvid, p: route.page };
+    } else {
+      throw new Error("视频下载请求中的视频 ID 或分 P 无效。");
+    }
+    path = "/downloads";
+    init = { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload) };
+  } else if (message.action === "poll" && /^[0-9a-f]{32}$/.test(message.jobId || "")) {
+    path = `/downloads/${message.jobId}`;
+    init = { method: "GET" };
+  } else {
+    throw new Error("视频下载请求无效。");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(base + path, { ...init, signal: controller.signal });
+    const data = await response.json();
+    if (!response.ok) {
+      if (message.action === "start" && (response.status === 404 ||
+          (response.status === 400 && data?.error === "unknown request field"))) {
+        throw new Error("本地 helper 不支持视频下载。请用新版 helper/start.ps1 重启后再试。");
+      }
+      throw new Error(String(data?.error || "本地视频下载服务出错。").slice(0, 300));
+    }
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("本地视频下载服务响应超时。");
+    if (error instanceof TypeError) {
+      throw new Error("没有连接到本地视频下载服务。请按 README 启动 helper。");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function getCache(key) {
   await storageReady;
   if (!/^(?:BV[0-9A-Za-z]{10}:\d{1,4}|yt:[A-Za-z0-9_-]{11}):.{1,120}$/.test(String(key || ""))) return null;
@@ -224,6 +272,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "BILI_GET": return biliGet(message.url);
       case "MODEL_CALL": return modelCall(message);
       case "LOCAL_ASR": return localAsr(message);
+      case "VIDEO_DOWNLOAD": return videoDownload(message);
       case "GET_CACHE": return getCache(message.key);
       case "PUT_CACHE": return putCache(message.key, message.value);
       case "OPEN_OPTIONS": await chrome.runtime.openOptionsPage(); return true;

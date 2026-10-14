@@ -1,18 +1,18 @@
 {
   "manifest_version": 3,
   "name": "AI 视频章节：B站与 YouTube",
-  "version": "0.2.2",
-  "description": "为 B 站和 YouTube 视频生成总结与章节，同步高亮字幕并支持字幕下载。",
+  "version": "0.3.0",
+  "description": "为 B 站和 YouTube 视频生成总结与章节，同步高亮字幕，并支持字幕和视频下载。",
   "permissions": ["storage", "scripting", "activeTab"],
   "host_permissions": [
     "https://www.bilibili.com/*",
     "https://api.bilibili.com/*",
     "https://*.hdslb.com/*",
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "http://127.0.0.1/*"
   ],
   "optional_host_permissions": [
     "https://*/*",
-    "http://127.0.0.1/*",
     "http://localhost/*"
   ],
   "background": {

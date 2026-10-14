@@ -82,6 +82,63 @@ class ValidationTests(unittest.TestCase):
             metadata.assert_called_once_with(canonical)
             download.assert_not_called()
 
+    def test_video_download_uses_fixed_filename_and_rejects_metadata_mismatch(self):
+        youtube = server.VideoRequest(None, youtube_id="dQw4w9WgXcQ")
+        bili = server.VideoRequest("BV1dRYP6oEtB", 2)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.assertEqual(server.download_path(root, youtube).name, "youtube_dQw4w9WgXcQ.mp4")
+            self.assertEqual(server.download_path(root, bili).name, "bilibili_BV1dRYP6oEtB_p2.mp4")
+            with patch.object(server, "_check_video_dependencies"), \
+                 patch.object(server, "_run_metadata", return_value={"id": "other-video", "duration": 10}), \
+                 patch.object(server.subprocess, "Popen") as process:
+                with self.assertRaisesRegex(server.ClientError, "different YouTube video"):
+                    server.download_video(youtube, root, lambda *_: None)
+                process.assert_not_called()
+                self.assertFalse(root.joinpath("youtube_dQw4w9WgXcQ.mp4").exists())
+
+    def test_video_download_creates_one_mp4_without_overwriting(self):
+        video = server.VideoRequest(None, youtube_id="dQw4w9WgXcQ")
+        class FakeProcess:
+            returncode = 0
+            pid = 1
+            stdout = io.StringIO("download:25.0%\ndownload:100.0%\n")
+
+            def poll(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+
+            def fake_popen(command, **kwargs):
+                self.assertEqual(command[-1], "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+                self.assertIn("--no-overwrites", command)
+                self.assertIn("--remux-video", command)
+                self.assertEqual(command[command.index("--progress-template") + 1],
+                                 "download:download:%(progress._percent_str)s")
+                self.assertEqual(kwargs["cwd"].parent, root)
+                kwargs["cwd"].joinpath("video.mp4").write_bytes(b"video data")
+                return FakeProcess()
+
+            with patch.object(server, "_check_video_dependencies"), \
+                 patch.object(server, "_run_metadata", return_value={"id": video.youtube_id, "duration": 10}), \
+                 patch.object(server.subprocess, "Popen", side_effect=fake_popen) as process:
+                target = server.download_video(video, root, lambda *_: None)
+                self.assertEqual(target, server.download_path(root, video).resolve())
+                self.assertEqual(target.read_bytes(), b"video data")
+                self.assertEqual(server.download_video(video, root, lambda *_: None), target)
+                self.assertEqual(process.call_count, 1)
+
+    def test_existing_download_requires_nonempty_regular_file(self):
+        video = server.VideoRequest("BV1dRYP6oEtB")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            target = server.download_path(root, video)
+            target.write_bytes(b"")
+            self.assertIsNone(server.existing_download(root, video))
+            target.write_bytes(b"video")
+            self.assertEqual(server.existing_download(root, video), target.resolve())
+
     def test_long_interview_fits_bounded_transcription_limit(self):
         def result(duration):
             return server.subprocess.CompletedProcess(
@@ -123,17 +180,28 @@ class HttpTests(unittest.TestCase):
 
         manager = server.JobManager(Path(self.temp.name), fake_worker)
 
+        def fake_download(video, root, update):
+            update(50, "downloading video")
+            root.mkdir(parents=True, exist_ok=True)
+            target = server.download_path(root, video)
+            target.write_bytes(b"downloaded mp4")
+            return target
+
+        downloads = server.DownloadManager(Path(self.temp.name) / "downloads", fake_download)
+
         class QuietHandler(server.Handler):
             def log_message(self, _format, *_args):
                 pass
 
         QuietHandler.manager = manager
+        QuietHandler.downloads = downloads
         self.http = ThreadingHTTPServer((server.HOST, 0), QuietHandler)
         self.http.daemon_threads = True
         self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"http://{server.HOST}:{self.http.server_port}"
         self.manager = manager
+        self.downloads = downloads
 
     def tearDown(self):
         self.http.shutdown()
@@ -179,8 +247,36 @@ class HttpTests(unittest.TestCase):
     def test_health_lists_supported_platforms(self):
         status, health = self._request("/health")
         self.assertEqual(status, 200)
-        self.assertEqual(health["protocolVersion"], 2)
+        self.assertEqual(health["protocolVersion"], 3)
         self.assertIn("youtube", health["platforms"])
+        self.assertTrue(health["features"]["videoDownload"])
+
+    def test_video_download_job_and_cached_result(self):
+        request = {"youtubeId": "dQw4w9WgXcQ"}
+        status, first = self._request("/downloads", request)
+        self.assertEqual(status, 202)
+        self.assertRegex(first["job_id"], r"^[0-9a-f]{32}$")
+        self.downloads.pending.join()
+        status, job = self._request("/downloads/" + first["job_id"])
+        self.assertEqual(status, 200)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["progress"], 100)
+        self.assertTrue(Path(job["path"]).is_file())
+        self.assertIsNone(job["error"])
+        status, cached = self._request("/downloads", request)
+        self.assertEqual(status, 200)
+        self.assertRegex(cached["job_id"], r"^[0-9a-f]{32}$")
+        self.assertEqual(cached["path"], job["path"])
+
+    def test_video_download_rejects_url_and_custom_path(self):
+        for payload in (
+            {"youtubeId": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+            {"youtubeId": "dQw4w9WgXcQ", "path": "C:/other"},
+            {"bvid": "BV1dRYP6oEtB", "url": "https://evil.test"},
+        ):
+            with self.subTest(payload=payload), self.assertRaises(urllib.error.HTTPError) as error:
+                self._request("/downloads", payload)
+            self.assertEqual(error.exception.code, 400)
 
     def test_youtube_http_rejects_mixed_ids(self):
         with self.assertRaises(urllib.error.HTTPError) as error:

@@ -63,6 +63,7 @@ def runtime_script(cached=None):
       window.__modelCalls = 0;
       window.__cacheWrites = [];
       window.__modelPrompts = [];
+      window.__videoDownloadRequests = [];
       window.chrome = {runtime: {
         lastError: null,
         onMessage: {addListener: (listener) => { window.__extensionMessageListener = listener; }},
@@ -81,6 +82,15 @@ def runtime_script(cached=None):
               summary: next ? '第二段总结' : 'YouTube 视频总结',
               chapters: [{start: 5, title: next ? '新视频章节' : '第一章', summary: '章节内容'}]
             })}});
+          }
+          if (message.type === 'VIDEO_DOWNLOAD') {
+            window.__videoDownloadRequests.push(message);
+            const job_id = 'a'.repeat(32);
+            const result = message.action === 'start'
+              ? {job_id, status: 'queued', progress: 0, stage: '等待下载'}
+              : {job_id, status: 'done', progress: 100, stage: '完成',
+                 path: 'C:/Users/Tester/Downloads/AI视频章节/youtube_AbCdEfGhI12.mp4'};
+            return callback({ok: true, result});
           }
           if (message.type === 'PUT_CACHE') window.__cacheWrites.push(message);
           callback({ok: true, result: null});
@@ -163,6 +173,14 @@ def run():
         assert network["player_calls"][0]["context"]["client"]["clientName"] == "VISIONOS"
         assert "第一章主题内容" in page.evaluate("window.__modelPrompts[0]")
         assert not page.locator(".bili-ai-transcript-column").is_visible()
+
+        page.locator(".bili-ai-video-download").click()
+        page.locator(".bili-ai-video-download-status:has-text('youtube_AbCdEfGhI12.mp4')").wait_for(
+            timeout=10000)
+        requests = page.evaluate("window.__videoDownloadRequests")
+        assert requests[0]["action"] == "start"
+        assert requests[0]["route"]["videoId"] == FIRST_ID
+        assert requests[1]["action"] == "poll"
 
         page.locator(".bili-ai-chapter").click()
         assert page.evaluate("window.__seek") == 5

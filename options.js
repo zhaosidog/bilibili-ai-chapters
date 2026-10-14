@@ -38,9 +38,9 @@ async function saveSettings(event) {
     const model = $("model").value.trim();
     const apiKey = $("api-key").value.trim();
     if (!model || !apiKey) throw new Error("请填写模型名称和 API Key。");
-    const origins = [originPattern(endpoint)];
-    if ($("local-asr").checked) origins.push("http://127.0.0.1/*");
-    const granted = await chrome.permissions.request({ origins: [...new Set(origins)] });
+    const helperOrigin = endpoint.protocol === "http:" && endpoint.hostname === "127.0.0.1";
+    const origins = helperOrigin ? [] : [originPattern(endpoint)];
+    const granted = origins.length ? await chrome.permissions.request({ origins }) : true;
     if (!granted) throw new Error("浏览器没有授予模型接口的访问权限。");
     await chrome.storage.local.set({
       aiSettings: {

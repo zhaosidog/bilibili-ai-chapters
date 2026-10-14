@@ -1,4 +1,4 @@
-"""Optional loopback ASR service for Bilibili and YouTube videos.
+"""Optional loopback ASR and video download service for Bilibili and YouTube.
 
 Run with ``python server.py`` after installing requirements.txt and ffmpeg.
 The browser extension never sends arbitrary media URLs to this service.
@@ -40,6 +40,8 @@ MAX_CACHE_BYTES = 20 * 1024 * 1024
 MAX_DURATION_SECONDS = 6 * 60 * 60
 MAX_TEMP_BYTES = 750 * 1024 * 1024
 DOWNLOAD_TIMEOUT_SECONDS = 20 * 60
+MAX_VIDEO_DOWNLOAD_BYTES = 8 * 1024 * 1024 * 1024
+VIDEO_DOWNLOAD_TIMEOUT_SECONDS = 4 * 60 * 60
 MODEL = os.environ.get("BILI_ASR_MODEL", "small")
 _language_setting = os.environ.get("BILI_ASR_LANGUAGE", "auto")
 LANGUAGE = None if _language_setting in {"", "auto"} else _language_setting
@@ -49,6 +51,8 @@ BVID_RE = re.compile(r"^BV[a-zA-Z0-9]{10}$")
 YOUTUBE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 ORIGIN_RE = re.compile(r"^chrome-extension://[a-p]{32}$")
 JOB_RE = re.compile(r"^/jobs/([0-9a-f]{32})$")
+DOWNLOAD_JOB_RE = re.compile(r"^/downloads/([0-9a-f]{32})$")
+VIDEO_PROGRESS_RE = re.compile(r"download:\s*(\d+(?:\.\d+)?)%")
 
 
 class ClientError(Exception):
@@ -350,6 +354,131 @@ def transcribe_video(video: VideoRequest, update: Callable[[int, str], None]) ->
     return segments
 
 
+def download_root() -> Path:
+    """Video files have one local destination; callers cannot choose a path."""
+    return Path.home() / "Downloads" / "AI视频章节"
+
+
+def download_path(root: Path, video: VideoRequest) -> Path:
+    if video.youtube_id is not None:
+        name = f"youtube_{video.youtube_id}.mp4"
+    else:
+        name = f"bilibili_{video.bvid}_p{video.page}.mp4"
+    return root / name
+
+
+def existing_download(root: Path, video: VideoRequest) -> Path | None:
+    path = download_path(root, video)
+    try:
+        return path.resolve() if not path.is_symlink() and path.is_file() and path.stat().st_size > 0 else None
+    except OSError:
+        return None
+
+
+def _check_video_dependencies() -> None:
+    if importlib.util.find_spec("yt_dlp") is None:
+        raise ClientError("yt-dlp is missing; install helper/requirements.txt")
+    if shutil.which("ffmpeg") is None:
+        raise ClientError("ffmpeg is missing from PATH")
+
+
+def _video_temp_bytes(folder: Path) -> int:
+    try:
+        return sum(file.stat().st_size for file in folder.rglob("*") if file.is_file())
+    except OSError:
+        return MAX_VIDEO_DOWNLOAD_BYTES + 1
+
+
+def download_video(video: VideoRequest, root: Path, update: Callable[[int, str], None]) -> Path:
+    """Download one verified public video into a temporary directory, then publish atomically."""
+    _check_video_dependencies()
+    url = (
+        f"https://www.youtube.com/watch?v={video.youtube_id}"
+        if video.youtube_id is not None
+        else f"https://www.bilibili.com/video/{video.bvid}/?p={video.page}"
+    )
+    update(5, "reading metadata")
+    metadata = _run_metadata(url)
+    if video.youtube_id is not None:
+        if metadata.get("id") != video.youtube_id:
+            raise ClientError("yt-dlp returned a different YouTube video")
+    else:
+        expected_ids = {video.bvid, f"{video.bvid}_p{video.page}"}
+        if metadata.get("id") not in expected_ids or (video.page > 1 and metadata.get("id") == video.bvid):
+            raise ClientError("yt-dlp returned a different Bilibili page")
+
+    root.mkdir(parents=True, exist_ok=True)
+    target = download_path(root, video)
+    if target.exists() or target.is_symlink():
+        existing = existing_download(root, video)
+        if existing is not None:
+            return existing
+        raise ClientError("download destination already exists but is not a valid video file")
+
+    update(10, "downloading video")
+    with tempfile.TemporaryDirectory(prefix=".video-ai-download-", dir=root) as temporary:
+        folder = Path(temporary)
+        command = [
+            sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist", "--no-warnings", "--no-colors",
+            "--no-overwrites", "--newline", "--progress", "--progress-template", "download:download:%(progress._percent_str)s",
+            "--socket-timeout", "15", "--retries", "2", "--fragment-retries", "2", "--max-filesize", "8G",
+            "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+            "--merge-output-format", "mp4", "--remux-video", "mp4", "-o", "video.%(ext)s", url,
+        ]
+        error_log = folder / "yt-dlp-error.log"
+        with error_log.open("wb") as error_file:
+            process = subprocess.Popen(
+                command, cwd=folder, stdout=subprocess.PIPE, stderr=error_file,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                start_new_session=os.name != "nt",
+            )
+
+            def report_progress() -> None:
+                if process.stdout is None:
+                    return
+                for line in process.stdout:
+                    match = VIDEO_PROGRESS_RE.search(line)
+                    if match:
+                        percent = min(100.0, float(match.group(1)))
+                        update(10 + int(percent * 0.8), "downloading video")
+
+            reader = threading.Thread(target=report_progress, daemon=True, name="video-download-progress")
+            reader.start()
+            started = time.monotonic()
+            try:
+                while process.poll() is None:
+                    if time.monotonic() - started > VIDEO_DOWNLOAD_TIMEOUT_SECONDS:
+                        raise ClientError("video download timed out")
+                    if _video_temp_bytes(folder) > MAX_VIDEO_DOWNLOAD_BYTES:
+                        raise ClientError("video download exceeded 8 GiB temporary storage limit")
+                    time.sleep(0.5)
+            except BaseException:
+                _kill_process_tree(process)
+                raise
+            finally:
+                reader.join(timeout=2)
+                if process.stdout is not None:
+                    process.stdout.close()
+        if process.returncode:
+            detail = _error_tail(error_log)
+            raise ClientError(f"yt-dlp could not download video: {detail or 'unknown error'}")
+        update(92, "saving video")
+        source = folder / "video.mp4"
+        if not source.is_file() or source.is_symlink() or source.stat().st_size == 0:
+            raise ClientError("yt-dlp did not create an MP4 video file")
+        if _video_temp_bytes(folder) > MAX_VIDEO_DOWNLOAD_BYTES:
+            raise ClientError("video download exceeded 8 GiB temporary storage limit")
+        try:
+            os.link(source, target)
+        except FileExistsError as exc:
+            existing = existing_download(root, video)
+            if existing is None:
+                raise ClientError("download destination already exists but is not a valid video file") from exc
+            return existing
+        return target.resolve()
+
+
 @dataclass
 class Job:
     id: str
@@ -447,8 +576,98 @@ class JobManager:
                 self.pending.task_done()
 
 
+@dataclass
+class DownloadJob:
+    id: str
+    video: VideoRequest
+    status: str = "queued"
+    progress: int = 0
+    stage: str = "queued"
+    path: str | None = None
+    error: str | None = None
+    created_at: float = field(default_factory=time.time)
+
+    def response(self) -> dict[str, Any]:
+        return {
+            "job_id": self.id, "status": self.status, "progress": self.progress,
+            "stage": self.stage, "path": self.path, "error": self.error,
+        }
+
+
+class DownloadManager:
+    def __init__(self, root: Path | None = None, worker: Callable = download_video):
+        self.root = root if root is not None else download_root()
+        self.worker = worker
+        self.jobs: dict[str, DownloadJob] = {}
+        self.active_by_video: dict[VideoRequest, str] = {}
+        self.lock = threading.Lock()
+        self.pending: queue.Queue[DownloadJob] = queue.Queue(maxsize=3)
+        threading.Thread(target=self._run, daemon=True, name="video-download-worker").start()
+
+    def submit(self, video: VideoRequest) -> tuple[dict[str, Any], int]:
+        with self.lock:
+            active = self.active_by_video.get(video)
+            if active:
+                return self.jobs[active].response(), HTTPStatus.ACCEPTED
+            cached = existing_download(self.root, video)
+            if cached is not None:
+                job = DownloadJob(uuid.uuid4().hex, video, status="done", progress=100, stage="done", path=str(cached))
+                self.jobs[job.id] = job
+                self._prune()
+                return job.response(), HTTPStatus.OK
+            job = DownloadJob(uuid.uuid4().hex, video)
+            try:
+                self.pending.put_nowait(job)
+            except queue.Full as exc:
+                raise QueueFullError("video download queue is full; try again later") from exc
+            self.jobs[job.id] = job
+            self.active_by_video[video] = job.id
+            self._prune()
+            return job.response(), HTTPStatus.ACCEPTED
+
+    def get(self, job_id: str) -> dict[str, Any] | None:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            return job.response() if job else None
+
+    def _prune(self) -> None:
+        terminal = sorted((j for j in self.jobs.values() if j.status in {"done", "error"}), key=lambda j: j.created_at)
+        for old in terminal[: max(0, len(self.jobs) - 64)]:
+            self.jobs.pop(old.id, None)
+
+    def _run(self) -> None:
+        while True:
+            job = self.pending.get()
+            with self.lock:
+                job.status = "running"
+                job.stage = "starting"
+
+            def update(progress: int, stage: str) -> None:
+                with self.lock:
+                    job.progress = min(99, max(job.progress, progress))
+                    job.stage = stage
+
+            try:
+                path = self.worker(job.video, self.root, update)
+                with self.lock:
+                    job.path = str(path.resolve())
+                    job.status = "done"
+                    job.progress = 100
+                    job.stage = "done"
+            except Exception as exc:
+                with self.lock:
+                    job.status = "error"
+                    job.stage = "error"
+                    job.error = str(exc)[:600] or type(exc).__name__
+            finally:
+                with self.lock:
+                    self.active_by_video.pop(job.video, None)
+                self.pending.task_done()
+
+
 class Handler(BaseHTTPRequestHandler):
     manager: JobManager
+    downloads: DownloadManager
 
     def _permitted(self) -> bool:
         origin = self.headers.get("Origin")
@@ -475,7 +694,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         if not self._permitted():
             return
-        if self.path not in {"/transcribe", "/health"} and not JOB_RE.fullmatch(self.path):
+        if self.path not in {"/transcribe", "/health", "/downloads"} and not JOB_RE.fullmatch(self.path) and not DOWNLOAD_JOB_RE.fullmatch(self.path):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -494,7 +713,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/health":
             self._json(HTTPStatus.OK, {"status": "ok", "source": "local-asr",
-                                       "protocolVersion": 2, "platforms": ["bilibili", "youtube"]})
+                                       "protocolVersion": 3, "platforms": ["bilibili", "youtube"],
+                                       "features": {"videoDownload": True}})
+            return
+        download_match = DOWNLOAD_JOB_RE.fullmatch(self.path)
+        if download_match:
+            job = self.downloads.get(download_match.group(1))
+            self._json(HTTPStatus.OK if job else HTTPStatus.NOT_FOUND, job or {"error": "job not found"})
             return
         match = JOB_RE.fullmatch(self.path)
         if match:
@@ -506,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._permitted():
             return
-        if self.path != "/transcribe":
+        if self.path not in {"/transcribe", "/downloads"}:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
@@ -525,7 +750,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(length))
             video = parse_video_request(payload)
-            data, status = self.manager.submit(video)
+            data, status = (self.downloads if self.path == "/downloads" else self.manager).submit(video)
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
             return
@@ -540,9 +765,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     Handler.manager = JobManager()
+    Handler.downloads = DownloadManager()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
-    print(f"Video local ASR listening on http://{HOST}:{PORT}", flush=True)
+    print(f"Video helper listening on http://{HOST}:{PORT}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

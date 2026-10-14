@@ -258,3 +258,46 @@ test("YouTube ASR explains when the running helper is too old", async () => {
   assert.equal(urls.length, 1);
   assert.ok(urls[0].endsWith("/health"));
 });
+
+test("video download submits only validated platform IDs and polls a fixed job URL", async () => {
+  const requests = [];
+  const jobId = "0123456789abcdef0123456789abcdef";
+  const worker = createWorker(async (url, init) => {
+    requests.push({ url, init });
+    return { ok: true, status: 200, json: async () => ({ job_id: jobId, status: "queued" }) };
+  }, { localAsrEnabled: false });
+  const youtube = await worker.send({ type: "VIDEO_DOWNLOAD", action: "start",
+    route: { platform: "youtube", videoId: "ABCDEFGHIJK" } });
+  assert.equal(youtube.ok, true);
+  assert.equal(requests[0].url, "http://127.0.0.1:8765/downloads");
+  assert.equal(requests[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(requests[0].init.body), { youtubeId: "ABCDEFGHIJK" });
+  const bilibili = await worker.send({ type: "VIDEO_DOWNLOAD", action: "start",
+    route: { platform: "bilibili", bvid: "BV1dRYP6oEtB", page: 2 } });
+  assert.equal(bilibili.ok, true);
+  assert.deepEqual(JSON.parse(requests[1].init.body), { bvid: "BV1dRYP6oEtB", p: 2 });
+  const poll = await worker.send({ type: "VIDEO_DOWNLOAD", action: "poll", jobId });
+  assert.equal(poll.ok, true);
+  assert.equal(requests[2].url, `http://127.0.0.1:8765/downloads/${jobId}`);
+  assert.equal(requests[2].init.method, "GET");
+  for (const route of [
+    { platform: "youtube", videoId: "../bad" },
+    { platform: "bilibili", bvid: "BV1dRYP6oEtB", page: 0 },
+    { platform: "bilibili", bvid: "../bad", page: 1 },
+    { platform: "other", videoId: "ABCDEFGHIJK" }
+  ]) {
+    assert.equal((await worker.send({ type: "VIDEO_DOWNLOAD", action: "start", route })).ok, false);
+  }
+  assert.equal((await worker.send({ type: "VIDEO_DOWNLOAD", action: "poll",
+    jobId: "../../health" })).ok, false);
+  assert.equal(requests.length, 3);
+});
+
+test("video download explains an old helper that lacks the download endpoint", async () => {
+  const worker = createWorker(async () => ({ ok: false, status: 404,
+    json: async () => ({ error: "not found" }) }));
+  const response = await worker.send({ type: "VIDEO_DOWNLOAD", action: "start",
+    route: { platform: "youtube", videoId: "ABCDEFGHIJK" } });
+  assert.equal(response.ok, false);
+  assert.match(response.error, /helper 不支持视频下载/);
+});

@@ -54,11 +54,20 @@ def run():
             ]}),
         ))
         page.add_init_script("""
+          window.__videoDownloadRequests = [];
           window.chrome = {runtime: {
             lastError: null,
             onMessage: {addListener: () => {}},
             sendMessage(message, callback) {
               let result = null;
+              if (message.type === 'VIDEO_DOWNLOAD') {
+                window.__videoDownloadRequests.push(message);
+                const job_id = 'b'.repeat(32);
+                result = message.action === 'start'
+                  ? {job_id, status: 'queued', progress: 0, stage: '等待下载'}
+                  : {job_id, status: 'done', progress: 100, stage: '完成',
+                     path: 'C:/Users/Tester/Downloads/AI视频章节/bilibili_BV1dRYP6oEtB_p1.mp4'};
+              }
               if (message.type === 'GET_SETTINGS') result = {
                 configured: true, autoAnalyze: true, localAsrEnabled: true,
                 profileId: 'smoke', model: 'test'
@@ -88,6 +97,13 @@ def run():
         assert page.locator(".bili-ai-summary").inner_text() == "这是视频总结。"
         assert page.locator(".bili-ai-chapter-title").inner_text() == "第一章"
         assert page.locator(".bili-ai-panel").bounding_box()["width"] <= 420
+        page.locator(".bili-ai-video-download").click()
+        page.locator(".bili-ai-video-download-status:has-text('bilibili_BV1dRYP6oEtB_p1.mp4')").wait_for(
+            timeout=10000)
+        requests = page.evaluate("window.__videoDownloadRequests")
+        assert requests[0]["route"]["bvid"] == BVID
+        assert requests[0]["route"]["page"] == 1
+        assert requests[1]["action"] == "poll"
         assert page.locator(".bili-ai-main-column").is_visible()
         assert not page.locator(".bili-ai-transcript-column").is_visible()
         page.locator(".bili-ai-view-tab[data-view='transcript']").click()
