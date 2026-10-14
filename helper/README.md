@@ -1,10 +1,18 @@
-# Optional local speech recognition helper
+# Optional local speech recognition and video download helper
+
+中文安装与使用步骤请先看[仓库主 README](../README.md)；本页补充本地服务的参数与接口细节。
 
 The browser extension uses Bilibili or YouTube subtitles when they are available. For a public video without readable subtitles, this helper can download its audio and produce timestamped speech segments with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [faster-whisper](https://github.com/SYSTRAN/faster-whisper). The extension then sends those segments to the language model you configured for its summary and chapter generation. The helper also saves full videos locally as MP4 when you click **下载视频** in the extension.
 
-## Install and run (Windows PowerShell)
+## Install and run
 
-Install standard CPython 3.11 or 3.12 and [FFmpeg](https://ffmpeg.org/download.html); make sure `ffmpeg -version` works in a new terminal. Check `python -c "import sys; print(sys.executable)"` before creating the virtual environment. On Windows, an Anaconda-based environment may conflict with the native speech recognition libraries; use a standalone CPython interpreter if model loading exits unexpectedly. From this `helper` directory:
+Install CPython 3.11 or 3.12 and [FFmpeg](https://ffmpeg.org/download.html); make sure `ffmpeg -version` works in a new terminal. For full YouTube transcription and video downloading, also install [Deno](https://docs.deno.com/runtime/getting_started/installation/) and verify `deno --version`. The `yt-dlp[default]` dependency installs the EJS scripts required by current yt-dlp; Deno runs them. Existing YouTube subtitles read by the browser extension do not need Deno. See [yt-dlp's EJS setup guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
+
+Run the following commands from this `helper` directory. Leave the terminal open while using the extension.
+
+### Windows PowerShell
+
+Check `python -c "import sys; print(sys.executable)"` before creating the virtual environment. An Anaconda-based environment may conflict with native speech recognition libraries; use standalone CPython if model loading exits unexpectedly.
 
 ```powershell
 python -m venv .venv
@@ -12,11 +20,21 @@ python -m venv .venv
 .\.venv\Scripts\python.exe server.py
 ```
 
-Leave the terminal running while using the extension. The service listens **only** on `http://127.0.0.1:8765`. It accepts requests from a Chrome extension origin or a local client with no `Origin` header. It does not accept arbitrary media URLs.
-
 For later runs, `.\start.ps1` starts the same virtual environment, adds its `Scripts` directory to `PATH`, and reuses a model stored in this checkout's `.cache/models/faster-whisper-small` directory when available. If PowerShell blocks local scripts, use `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1` instead; this changes policy only for that process. You can also start `server.py` directly as above.
 
-Check it with `Invoke-RestMethod http://127.0.0.1:8765/health`. After updating the helper files, stop the old process and start it again; a running Python process does not reload `server.py` automatically. The health response should list `youtube` under `platforms`.
+### macOS Terminal
+
+Use Python 3.12, or replace `python3.12` below with `python3.11` if that is the version you installed. The repository has no Mac startup script; start the server with the last command on later runs too. The Mac helper path is implemented but has not yet been verified on a physical Mac.
+
+```bash
+python3.12 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python server.py
+```
+
+### Check the service
+
+The service listens **only** on `http://127.0.0.1:8765`. It accepts requests from a Chrome extension origin or a local client with no `Origin` header. It does not accept arbitrary media URLs. Open <http://127.0.0.1:8765/health> in a browser, or run `Invoke-RestMethod http://127.0.0.1:8765/health` on Windows / `curl http://127.0.0.1:8765/health` on Mac. The response should list `youtube` under `platforms` and `videoDownload: true` under `features`. After updating helper files, stop the old process and start it again; a running Python process does not reload `server.py` automatically.
 
 Video downloading needs `yt-dlp` and `ffmpeg`; it does not need a speech model or AI API Key. Files go to `~/Downloads/AI视频章节` (`C:\Users\<your user>\Downloads\AI视频章节` on a typical Windows installation). Names are `youtube_<video-id>.mp4` or `bilibili_<BV-id>_p<page>.mp4`. The helper reports the exact path on completion and reuses an existing nonempty file instead of overwriting it.
 
@@ -28,6 +46,12 @@ $env:BILI_ASR_LANGUAGE = "zh"   # or "auto"
 $env:BILI_ASR_DEVICE = "cpu"    # or "cuda" with a working CUDA setup
 $env:BILI_ASR_COMPUTE_TYPE = "int8"
 .\.venv\Scripts\python.exe server.py
+```
+
+On macOS, set the same options for one run with, for example:
+
+```bash
+BILI_ASR_MODEL=medium BILI_ASR_LANGUAGE=zh ./.venv/bin/python server.py
 ```
 
 ## API
@@ -49,8 +73,14 @@ The helper limits input bodies to 4 KiB, videos to six hours, and temporary down
 
 Full video downloads have an 8 GiB temporary storage limit and a four-hour timeout. Availability depends on what Bilibili or YouTube exposes to `yt-dlp`; login-only, restricted, or protected videos may fail.
 
-Run validation and API tests without installing the optional ASR packages:
+Run validation and API tests without downloading a speech model:
 
 ```powershell
-python -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+On macOS:
+
+```bash
+./.venv/bin/python -m unittest discover -s tests -v
 ```
